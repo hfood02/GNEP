@@ -25,7 +25,7 @@ This software is distributed under the GNU General Public License (GPL) version 
 
 ## How to use?
 ### input file `gmlp.in`
-```json
+```bash
 prediction          0
 type                2 Ge Se
 cutoff              7 5
