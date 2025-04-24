@@ -39,7 +39,7 @@ neuron              70
 #stop_pref_f        10
 #start_pref_v       0.1
 #stop_pref_v        1
-#use_energy_shift   1
+#energy_shift   1
 batch               1
 epoch               400
 ```
