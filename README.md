@@ -33,13 +33,7 @@ n_max               10 8
 l_max               4 
 basis_size          8 8
 neuron              70
-#start_pref_e       0.2
-#stop_pref_e        10
-#start_pref_f       100
-#stop_pref_f        10
-#start_pref_v       0.1
-#stop_pref_v        1
-#energy_shift   1
+#energy_shift       1
 batch               1
 epoch               400
 ```
