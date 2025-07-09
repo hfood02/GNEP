@@ -33,9 +33,20 @@ l_max               4
 basis_size          8 8
 neuron              70
 #energy_shift       1
+#lambda_e           1.0          
+#lambda_f           2.0        
+#lambda_v           0.1
+#weight_decay       0.0001
+#start_lr           0.001
+#stop_lr            0.0000001
 batch               1
 epoch               400
 ```
 ## GPUMD & NEP Manual
 Some similar parameter settings and explanations can be found in the GPUMD manual:
 * Latest released version: https://gpumd.org/
+
+## References
+
+[1] Hongfu Huang, Junhao Peng, Kaiqi Li, Jian Zhou, Zhimei Sun, [Efficient GPU-Accelerated Training of a Neuroevolution Potential with Analytical Gradients](http://arxiv.org/abs/2507.00528),
+arXiv:2507.00528 [cond-mat.dis-nn; cond-mat.mtrl-sci; physics.comp-ph].
