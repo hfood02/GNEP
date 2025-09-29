@@ -94,7 +94,7 @@ void Parameters::set_default_parameters()
   lambda_e = lambda_f = 1.0f;  // energy and force are more important
   lambda_v = 0.1f;             // virial is less important
   lambda_shear = 1.0f;         // do not weight shear virial more by default
-  lambda_q = 0.01f;            // need to test
+  lambda_q = 0.1f;             // need to test
   force_delta = 0.0f;          // no modification of force loss
   batch_size = 1000;           // large enough in most cases
   use_full_batch = 0;          // default is not to enable effective full-batch
@@ -181,6 +181,9 @@ void Parameters::calculate_parameters()
     if (train_mode != 0) {
       PRINT_INPUT_ERROR("Charge is only supported for potential model.");
     }
+    if (version != 4) {
+      PRINT_INPUT_ERROR("Charge is only supported for NEP4.");
+    }
   }
 
   if (train_mode == 0) {
@@ -211,14 +214,18 @@ void Parameters::calculate_parameters()
   }
 
   if (version == 3) {
+    number_of_variables_ann_1 = (dim + 2) * num_neurons1;
     number_of_variables_ann = (dim + 2) * num_neurons1 + 1;
-    if (charge_mode) {
-      number_of_variables_ann += num_neurons1;
-    }
   } else if (version == 4) {
+    number_of_variables_ann_1 = (dim + 2) * num_neurons1;
     number_of_variables_ann = (dim + 2) * num_neurons1 * num_types + 1;
     if (charge_mode) {
-      number_of_variables_ann += num_neurons1 * num_types;
+      number_of_variables_ann_1 += num_neurons1;
+      number_of_variables_ann += num_neurons1 * num_types + 1;
+      if (charge_mode >= 4) {
+        number_of_variables_ann_1 += num_neurons1;
+        number_of_variables_ann += num_neurons1 * num_types;
+      }
     }
   }
 
@@ -255,8 +262,7 @@ void Parameters::calculate_parameters()
     }
     std::vector<std::string> tokens;
     const int NUM89 = 89;
-    const int num_ann_per_element = (dim + (charge_mode ? 3 : 2)) * num_neurons1;
-    const int num_ann = NUM89 * num_ann_per_element + 1;
+    const int num_ann = NUM89 * number_of_variables_ann_1 + (charge_mode ? 2 : 1);
     const int num_cnk_radial = NUM89 * NUM89 * (n_max_radial + 1) * (basis_size_radial + 1);
     const int num_cnk_angular = NUM89 * NUM89 * (n_max_angular + 1) * (basis_size_angular + 1);
     const int num_tot = num_ann + num_cnk_radial + num_cnk_angular;
@@ -451,6 +457,10 @@ void Parameters::report_inputs()
       printf("    (input)   use NEP-Charge and include k-space only; lambda_q = %g.\n", lambda_q);
     } else if (charge_mode == 3) {
       printf("    (input)   use NEP-Charge and include real-space only; lambda_q = %g.\n", lambda_q);
+    } else if (charge_mode == 4) {
+      printf("    (input)   use NEP-Charge-VdW and include k-space only; lambda_q = %g.\n", lambda_q);
+    } else if (charge_mode == 5) {
+      printf("    (input)   use NEP-Charge-VdW and include real-space only; lambda_q = %g.\n", lambda_q);
     }
   }
 
@@ -1289,14 +1299,22 @@ void Parameters::parse_charge_mode(const char** param, int num_param)
 {
   is_charge_mode_set = true;
 
-  if (num_param != 2) {
-    PRINT_INPUT_ERROR("charge_mode should have one parameter.\n");
+  if (num_param != 2 && num_param != 3) {
+    PRINT_INPUT_ERROR("charge_mode should have one or two parameters.\n");
   }
   if (!is_valid_int(param[1], &charge_mode)) {
     PRINT_INPUT_ERROR("charge mode should be an integer.\n");
   }
-  if (charge_mode != 0 && charge_mode != 1 && charge_mode != 2 && charge_mode != 3) {
-    PRINT_INPUT_ERROR("charge mode should be 0 or 1 or 2 or 3.");
+  if (charge_mode < 0 || charge_mode > 5) {
+    PRINT_INPUT_ERROR("charge mode should be 0 or 1 or 2 or 3 or 4 or 5.");
+  }
+  if (num_param == 3) {
+    if (!is_valid_int(param[2], &flip_charge)) {
+      PRINT_INPUT_ERROR("flip_charge should be an integer.\n");
+    }
+    if (flip_charge < 0 || flip_charge > 1) {
+      PRINT_INPUT_ERROR("flip_charge should be 0 or 1.");
+    }
   }
 }
 
@@ -1316,8 +1334,8 @@ void Parameters::parse_save_potential(const char** param, int num_param)
 {
   is_save_potential_set = true;
 
-  if (num_param != 3) {
-    PRINT_INPUT_ERROR("save_potential should have 2 parameters.\n");
+  if (num_param != 4) {
+    PRINT_INPUT_ERROR("save_potential should have 3 parameters.\n");
   }
   if (!is_valid_int(param[1], &save_potential)) {
     PRINT_INPUT_ERROR("save_potential interval should be an integer.\n");
@@ -1330,5 +1348,11 @@ void Parameters::parse_save_potential(const char** param, int num_param)
   }
   if (save_potential_format != 0 && save_potential_format != 1) {
     PRINT_INPUT_ERROR("save_potential format should be 0 or 1.");
+  }  
+  if (!is_valid_int(param[3], &save_potential_restart)) {
+    PRINT_INPUT_ERROR("save_potential save restart should be an integer.\n");
+  }
+  if (save_potential_restart != 0 && save_potential_restart != 1) {
+    PRINT_INPUT_ERROR("save_potential save restart should be 0 or 1.");
   }  
 }

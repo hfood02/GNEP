@@ -26,21 +26,24 @@ This software is distributed under the GNU General Public License (GPL) version 
 ### input file `gnep.in`
 ```bash
 prediction          0
+output_descriptor   2
 type                2 Ge Se
 cutoff              7 5
 n_max               10 8
-l_max               4 
+l_max               4     # only 3-body：max 8
 basis_size          8 8
 neuron              70
 #energy_shift       1
 #lambda_e           1.0          
 #lambda_f           2.0        
 #lambda_v           0.1
-#weight_decay       0.0001
+#weight_decay       0.0001  # Applicable to AdamW
 #start_lr           0.001
 #stop_lr            0.0000001
+#lr_cos_restart     1 1 10 2.0 0.8   # minimal: lr_cos_restart 1
 batch               1
 epoch               400
+
 ```
 ## GPUMD & NEP Manual
 Some similar parameter settings and explanations can be found in the GPUMD manual:
