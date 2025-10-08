@@ -25,7 +25,7 @@ CFLAGS = -std=c++14 -O3 $(CUDA_ARCH)
 endif
 INC = -I./
 LDFLAGS = 
-LIBS = -lcublas -lcusolver
+LIBS = -lcublas -lcusolver -lcufft
 
 
 ###########################################################
@@ -83,7 +83,7 @@ HEADERS =                         \
 ###########################################################
 # executables
 ###########################################################
-all: gpumd nep 
+all: gpumd nep gnep
 gpumd: $(OBJ_GPUMD)
 	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 	@echo =================================================
