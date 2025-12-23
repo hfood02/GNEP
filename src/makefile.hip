@@ -5,8 +5,6 @@
 # 2) Do not remove -DUSE_HIP.
 # 3) Add -DUSE_PLUMED to CFLAGS when use the PLUMED plugin
 #    and remove it otherwise.
-# 4) Add -DUSE_TABLE to speed up MD simulations with NEP
-#    using pre-computed radial functions in the descriptors
 ###########################################################
 
 
@@ -17,7 +15,7 @@ CC = hipcc
 CFLAGS = -std=c++14 -O3 --offload-arch=gfx90a -DUSE_HIP
 INC = -I./
 LDFLAGS = 
-LIBS = -lhipblas -lhipsolver
+LIBS = -lhipblas -lhipsolver -lhipfft
 
 
 ###########################################################

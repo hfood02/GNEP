@@ -16,7 +16,8 @@
 /*----------------------------------------------------------------------------80
 The class dealing with the interlayer potential(ILP) and neuroevolution 
 potential(NEP).
-TODO:
+
+Implemented by: Hekai Bu (Wuhan University), hekai_bu@whu.edu.cn
 ------------------------------------------------------------------------------*/
 
 #include "ilp_nep.cuh"
@@ -48,108 +49,9 @@ static inline bool check_sublayer(const char* element)
          strcmp(element, "Te") == 0;
 }
 
-#ifdef CODING
-static __global__ void check_para_gpu(
-  void* h_parambs,
-  void* h_annmbs,
-  const int num_nep)
-{
-  printf("\n\n========== CHECK PARAMETER BUFFER ==========\n");
-  float* f_parambs = (float*)h_parambs;
-  int* i_parambs = (int*)h_parambs;
-  float* f_annmbs = (float*)h_annmbs;
-  int* i_annmbs = (int*)h_annmbs;
-  for (int i = 0; i < num_nep; ++i) {
-    printf("---------- NEP %d HEAD PARAMETERS -----------\n", i);
-    printf("use_typewise_cutoff               %8d\n", i_parambs[UTC     ]);
-    printf("typewise_cutoff_radial_factor     %8f\n", f_parambs[TCRF    ]);
-    printf("typewise_cutoff_angular_factor    %8f\n", f_parambs[TCAF    ]);
-    printf("nep version                       %8d\n", i_parambs[VERSION ]);
-    printf("rc_radial                         %8f\n", f_parambs[RCR     ]);
-    printf("rc_angular                        %8f\n", f_parambs[RCA     ]);
-    printf("rcinv_radial                      %8f\n", f_parambs[RCIR    ]);
-    printf("rcinv_angular                     %8f\n", f_parambs[RCIA    ]);
-    printf("MN_radial                         %8d\n", i_parambs[MNR     ]);
-    printf("MN_angular                        %8d\n", i_parambs[MNA     ]);
-    printf("n_max_radial                      %8d\n", i_parambs[NMAXR   ]);
-    printf("n_max_angular                     %8d\n", i_parambs[NMAXA   ]);
-    printf("L_max                             %8d\n", i_parambs[LMAX    ]);
-    printf("dim_angular                       %8d\n", i_parambs[DIMA    ]);
-    printf("num_L                             %8d\n", i_parambs[NUML    ]);
-    printf("basis_size_radial                 %8d\n", i_parambs[BSR     ]);
-    printf("basis_size_angular                %8d\n", i_parambs[BSA     ]);
-    printf("num_types_sq                      %8d\n", i_parambs[NTS     ]);
-    printf("num_c_radial                      %8d\n", i_parambs[NCR     ]);
-    printf("num_types                         %8d\n", i_parambs[NT      ]);
-    printf("ann dim                           %8d\n",  i_annmbs[ANNDIM  ]);
-    printf("num_neurous1                      %8d\n",  i_annmbs[NNEUR   ]);
-    printf("bias for output layer             %8f\n",  f_annmbs[OUTB1   ]);
-
-    i_annmbs += H_ANN_OFFSET;
-    f_annmbs += H_ANN_OFFSET;
-    i_parambs += H_PAR_OFFSET;
-    f_parambs += H_PAR_OFFSET;
-
-  }
-
-  f_parambs = (float*)h_parambs;
-  i_parambs = (int*)h_parambs;
-  f_annmbs = (float*)h_annmbs;
-  i_annmbs = (int*)h_annmbs;
-  for (int i = 0; i < num_nep; ++i) {
-    printf("---------- NEP %d ANN PARAMETERS -----------\n", i);
-    float* w0 = FLT_PTR((float*)h_annmbs + i * H_ANN_OFFSET + PTRW0);
-    float* b0 = FLT_PTR((float*)h_annmbs + i * H_ANN_OFFSET + PTRB0);
-    float* w1 = FLT_PTR((float*)h_annmbs + i * H_ANN_OFFSET + PTRW1);
-    float* c  = FLT_PTR((float*)h_annmbs + i * H_ANN_OFFSET + PTRC);
-    float* qs = FLT_PTR((float*)h_parambs + i * H_PAR_OFFSET + PTRQS); 
-    int anndim = i_annmbs[ANNDIM];
-    int nneu = i_annmbs[NNEUR];
-    printf("# w0 type1\n");
-    for (int j = 0; j < anndim * nneu; ++j) {
-      printf("%15.7e\n", w0[j]);
-    }
-
-    printf("# b0 type1\n");
-    for (int j = 0; j < nneu; ++j) {
-      printf("%15.7e\n", b0[j]);
-    }
-
-    printf("# w1 type1\n");
-    for (int j = 0; j < nneu; ++j) {
-      printf("%15.7e\n", w1[j]);
-    }
-
-    printf("# c\n");
-    int num_c = i_parambs[NTS] * ((i_parambs[NMAXR] + 1) * (i_parambs[BSR] + 1) + 
-                                  (i_parambs[NMAXA] + 1) * (i_parambs[BSA] + 1));
-    for (int j = 0; j < num_c; ++j) {
-      printf("%15.7e\n", c[j]);
-    }
-
-    printf("# q_scaler\n");
-    for (int j = 0; j < anndim; ++j) {
-      printf("%15.7e\n", qs[j]);
-    }
-
-    i_annmbs += H_ANN_OFFSET;
-    f_annmbs += H_ANN_OFFSET;
-    i_parambs += H_PAR_OFFSET;
-    f_parambs += H_PAR_OFFSET;
-  }
-
-  printf("========== CHECK PARAMETER BUFFER ==========\n\n");
-}
-#endif
-
 
 ILP_NEP::ILP_NEP(FILE* fid_ilp, FILE* fid_nep_map, int num_types, int num_atoms)
 {
-#ifdef USE_TABLE
-  printf("=============================================================================\n");
-  printf("NEP+ILP potential doesn't support `USE_TABLE` and uses normal version of NEP.\n");
-  printf("=============================================================================\n\n");
-#endif
   // read ILP elements
   printf("Use %d-element ILP potential with elements:\n", num_types);
   if (!(num_types >= 1 && num_types <= MAX_TYPE_ILP_NEP)) {
@@ -335,11 +237,6 @@ ILP_NEP::ILP_NEP(FILE* fid_ilp, FILE* fid_nep_map, int num_types, int num_atoms)
         parambs[i].use_typewise_cutoff = true;
       }
     }
-//  #ifdef USE_TABLE
-//    if (paramb.use_typewise_cutoff) {
-//      PRINT_INPUT_ERROR("Cannot use tabulated radial functions with typewise cutoff.");
-//    }
-//  #endif
 
     // n_max 10 8
     tokens = get_tokens(input);
@@ -466,17 +363,6 @@ ILP_NEP::ILP_NEP(FILE* fid_ilp, FILE* fid_nep_map, int num_types, int num_atoms)
     nep_map_cpu[i] = nep_i;
     printf("group %d of group method %d uses NEP %d.\n", i, nep_group_method, nep_i);
   }
-
-#ifdef CODING
-  printf("\n========== TYPE MAP: ILP --> NEP ==========\n");
-  for (int i = 0; i < num_nep; ++i) {
-    for (int j = 0; j < num_types; ++j) {
-      printf("%d\t\t", type_map_cpu[j + i * num_types]);
-    }
-    printf("\n");
-  }
-  printf("========== TYPE MAP: ILP --> NEP ==========\n");
-#endif
   // cp two maps to gpu
   nep_map.resize(num_nep_group);
   type_map.resize(num_types * num_nep);
@@ -525,11 +411,6 @@ ILP_NEP::ILP_NEP(FILE* fid_ilp, FILE* fid_nep_map, int num_types, int num_atoms)
   nep_data.sum_fxyz.resize(num_atoms * (max_n_max_angular + 1) * NUM_OF_ABC);
   nep_data.cpu_NN_radial.resize(num_atoms);
   nep_data.cpu_NN_angular.resize(num_atoms);
-
-// #ifdef USE_TABLE
-//   construct_table(parameters.data());
-//   printf("    use tabulated radial functions to speed up.\n");
-// #endif
 
   // updata nep parameters and ann parameters
   // calc buffer size
@@ -740,10 +621,6 @@ ILP_NEP::ILP_NEP(FILE* fid_ilp, FILE* fid_nep_map, int num_types, int num_atoms)
   para_buf_w= nullptr;
   para_buf_ptrw = nullptr;
 
-#ifdef CODING
-//  check_para_gpu<<<1,1>>>(h_parambs, h_annmbs, num_nep);
-//  GPU_CHECK_KERNEL
-#endif
 }
 
 ILP_NEP::~ILP_NEP(void)
@@ -765,16 +642,6 @@ static __device__ __forceinline__ float calc_Tap(const float r_ij, const float R
     }
   }
 
-  // r = r_ij * Rcutinv;
-  // Tap = Tap_coeff[7];
-  // Tap = Tap * r + Tap_coeff[6];
-  // Tap = Tap * r + Tap_coeff[5];
-  // Tap = Tap * r + Tap_coeff[4];
-  // Tap = Tap * r + Tap_coeff[3];
-  // Tap = Tap * r + Tap_coeff[2];
-  // Tap = Tap * r + Tap_coeff[1];
-  // Tap = Tap * r + Tap_coeff[0];
-
   return Tap;
 }
 
@@ -793,15 +660,6 @@ static __device__ __forceinline__ float calc_dTap(const float r_ij, const float 
     }
     dTap *= Rcutinv;
   }
-  // r = r_ij * Rcutinv;
-  // dTap = 7.0f * Tap_coeff[7];
-  // dTap = dTap * r + 6.0f * Tap_coeff[6];
-  // dTap = dTap * r + 5.0f * Tap_coeff[5];
-  // dTap = dTap * r + 4.0f * Tap_coeff[4];
-  // dTap = dTap * r + 3.0f * Tap_coeff[3];
-  // dTap = dTap * r + 2.0f * Tap_coeff[2];
-  // dTap = dTap * r + Tap_coeff[1];
-  // dTap *= Rcutinv;
 
   return dTap;
 }
@@ -1230,8 +1088,6 @@ static __device__ void calc_normal_cbn(
     // nninv = 1.0 / nn;
     nninv = rnorm3df(n1[0], n1[1], n1[2]);
     
-    // TODO
-    // if (nn == 0) error->one(FLERR, "The magnitude of the normal vector is zero");
     // the unit normal vector
     normal[0] = n1[0] * nninv;
     normal[1] = n1[1] * nninv;
@@ -1363,13 +1219,9 @@ static __device__ void calc_normal_cbn(
     n1[1] = (pv12[1] + pv31[1] + pv23[1]) * continv;
     n1[2] = (pv12[2] + pv31[2] + pv23[2]) * continv;
     // the magnitude of the normal vector
-    // nn2 = n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2];
-    // nn = sqrt(nn2);
 
     // nninv = 1.0 / nn;
     nninv = rnorm3df(n1[0], n1[1], n1[2]);
-    // TODO
-    // if (nn == 0) error->one(FLERR, "The magnitude of the normal vector is zero");
     // the unit normal vector
     normal[0] = n1[0] * nninv;
     normal[1] = n1[1] * nninv;
@@ -1905,8 +1757,6 @@ static __global__ void gpu_find_force(
       rdsq1 = rhosq1 * delta2inv;
 
       // store exponents
-      // exp0 = exp(-lambda_ * (r - z0));
-      // exp1 = exp(-rdsq1);
       exp0 = expf(-lambda_ * (r - z0));
       exp1 = expf(-rdsq1);
 
@@ -1929,12 +1779,6 @@ static __global__ void gpu_find_force(
         dnormdri[0][1] * delx + dnormdri[1][1] * dely + dnormdri[2][1] * delz;
       dprodnorm1[2] = 
         dnormdri[0][2] * delx + dnormdri[1][2] * dely + dnormdri[2][2] * delz;
-      // fp1[0] = prodnorm1 * normal[0] * fpair1;
-      // fp1[1] = prodnorm1 * normal[1] * fpair1;
-      // fp1[2] = prodnorm1 * normal[2] * fpair1;
-      // fprod1[0] = prodnorm1 * dprodnorm1[0] * fpair1;
-      // fprod1[1] = prodnorm1 * dprodnorm1[1] * fpair1;
-      // fprod1[2] = prodnorm1 * dprodnorm1[2] * fpair1;
       fp1[0] = prodnorm1_m_fpair1 * normal[0];
       fp1[1] = prodnorm1_m_fpair1 * normal[1];
       fp1[2] = prodnorm1_m_fpair1 * normal[2];
@@ -1942,9 +1786,6 @@ static __global__ void gpu_find_force(
       fprod1[1] = prodnorm1_m_fpair1 * dprodnorm1[1];
       fprod1[2] = prodnorm1_m_fpair1 * dprodnorm1[2];
 
-      // fkcx = (delx * fsum - fp1[0]) * Tap - Vilp * dTap * delx * rinv;
-      // fkcy = (dely * fsum - fp1[1]) * Tap - Vilp * dTap * dely * rinv;
-      // fkcz = (delz * fsum - fp1[2]) * Tap - Vilp * dTap * delz * rinv;
       fkcx = (delx * fsum - fp1[0]) * Tap - Vilp_m_dTap_m_rinv * delx;
       fkcy = (dely * fsum - fp1[1]) * Tap - Vilp_m_dTap_m_rinv * dely;
       fkcz = (delz * fsum - fp1[2]) * Tap - Vilp_m_dTap_m_rinv * delz;
@@ -1959,9 +1800,6 @@ static __global__ void gpu_find_force(
 
       float minus_prodnorm1_m_fpair1_m_Tap = -prodnorm1 * fpair1 * Tap;
       for (int kk = 0; kk < ilp_neighbor_number; ++kk) {
-      // for (int kk = 0; kk < 0; ++kk) {
-        // int index_ilp = n1 + number_of_particles * kk;
-        // int n2_ilp = g_ilp_neighbor_list[index_ilp];
         // derivatives of the product of rij and ni respect to rk, k=0,1,2, where atom k is the neighbors of atom i
         dprodnorm1[0] = dnormal[0][kk][0] * delx + dnormal[1][kk][0] * dely +
             dnormal[2][kk][0] * delz;
@@ -1969,9 +1807,6 @@ static __global__ void gpu_find_force(
             dnormal[2][kk][1] * delz;
         dprodnorm1[2] = dnormal[0][kk][2] * delx + dnormal[1][kk][2] * dely +
             dnormal[2][kk][2] * delz;
-        // fk[0] = (-prodnorm1 * dprodnorm1[0] * fpair1) * Tap;
-        // fk[1] = (-prodnorm1 * dprodnorm1[1] * fpair1) * Tap;
-        // fk[2] = (-prodnorm1 * dprodnorm1[2] * fpair1) * Tap;
         fk[0] = minus_prodnorm1_m_fpair1_m_Tap * dprodnorm1[0];
         fk[1] = minus_prodnorm1_m_fpair1_m_Tap * dprodnorm1[1];
         fk[2] = minus_prodnorm1_m_fpair1_m_Tap * dprodnorm1[2];
@@ -1980,20 +1815,6 @@ static __global__ void gpu_find_force(
         g_f12y_ilp_neigh[n1 + number_of_particles * kk] += fk[1];
         g_f12z_ilp_neigh[n1 + number_of_particles * kk] += fk[2];
 
-        // delki[0] = g_x[n2_ilp] - x1;
-        // delki[1] = g_y[n2_ilp] - y1;
-        // delki[2] = g_z[n2_ilp] - z1;
-        // apply_mic(box, delki[0], delki[1], delki[2]);
-
-        // s_sxx += delki[0] * fk[0] * 0.5;
-        // s_sxy += delki[0] * fk[1] * 0.5;
-        // s_sxz += delki[0] * fk[2] * 0.5;
-        // s_syx += delki[1] * fk[0] * 0.5;
-        // s_syy += delki[1] * fk[1] * 0.5;
-        // s_syz += delki[1] * fk[2] * 0.5;
-        // s_szx += delki[2] * fk[0] * 0.5;
-        // s_szy += delki[2] * fk[1] * 0.5;
-        // s_szz += delki[2] * fk[2] * 0.5;
         s_sxx += delkix_half[kk] * fk[0];
         s_sxy += delkix_half[kk] * fk[1];
         s_sxz += delkix_half[kk] * fk[2];
@@ -2223,42 +2044,7 @@ static __global__ void reduce_force_many_body(
 }
 
 
-
 // ----- NEP part -----
-
-
-#ifdef CODING
-static __device__ void check_ann(
-  const int N_des,
-  const int N_neu,
-  const float* w0,
-  const float* b0,
-  const float* w1,
-  const float* b1,
-  float* q)
-{
-  printf("N_d[%d] N_n[%d] b1[%15.7e]\n", N_des, N_neu, b1[0]);
-  printf("### w0\n");
-  for (int n = 0; n < N_neu; ++n) {
-    for (int d = 0; d < N_des; ++d) {
-      printf("%15.7e\n", w0[n * N_des + d]);
-    }
-  }
-  printf("### b0\n");
-  for (int n = 0; n < N_neu; ++n) {
-    printf("%15.7e\n", b0[n]);
-  }
-  printf("### w1\n");
-  for (int n = 0; n < N_neu; ++n) {
-    printf("%15.7e\n", w1[n]);
-  }
-  printf("### q\n");
-  for (int n = 0; n < N_des; ++n) {
-    printf("%15.7e\n", q[n]);
-  }
-}
-#endif
-
 static __global__ void find_descriptor(
   const int* nep_map,
   const int* type_map,
@@ -2278,10 +2064,6 @@ static __global__ void find_descriptor(
   const double* __restrict__ g_x,
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
-// #ifdef USE_TABLE
-//   const float* __restrict__ g_gn_radial,
-//   const float* __restrict__ g_gn_angular,
-// #endif
   double* g_pe,
   float* g_Fp,
   double* g_virial,
@@ -2311,32 +2093,10 @@ static __global__ void find_descriptor(
       apply_mic(box, x12double, y12double, z12double);
       float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
       float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
-
-// #ifdef USE_TABLE
-//       int index_left, index_right;
-//       float weight_left, weight_right;
-//       find_index_and_weight(
-//         d12 * paramb.rcinv_radial, index_left, index_right, weight_left, weight_right);
-//       int t12 = t1 * paramb.num_types + g_type[n2];
-//       for (int n = 0; n <= paramb.n_max_radial; ++n) {
-//         q[n] +=
-//           g_gn_radial[(index_left * paramb.num_types_sq + t12) * (paramb.n_max_radial + 1) + n] *
-//             weight_left +
-//           g_gn_radial[(index_right * paramb.num_types_sq + t12) * (paramb.n_max_radial + 1) + n] *
-//             weight_right;
-//       }
-// #else
       float fc12;
       int t2 = type_map[g_type[n2] + type_offset];
-      // float rc = paramb.rc_radial;
       float rc = paramb[RCR];
-      // if (paramb.use_typewise_cutoff) {
-      //   rc = min(
-      //     (COVALENT_RADIUS[paramb.atomic_numbers[t1]] +
-      //      COVALENT_RADIUS[paramb.atomic_numbers[t2]]) *
-      //       paramb.typewise_cutoff_radial_factor,
-      //     rc);
-      // }
+
       if (paramb_int[UTC]) {
         rc = min(
           (COVALENT_RADIUS[atomic_numbers[t1]] +
@@ -2348,16 +2108,6 @@ static __global__ void find_descriptor(
       find_fc(rc, rcinv, d12, fc12);
       float fn12[MAX_NUM_N];
 
-      // find_fn(paramb.basis_size_radial, rcinv, d12, fc12, fn12);
-      // for (int n = 0; n <= paramb.n_max_radial; ++n) {
-      //   float gn12 = 0.0f;
-      //   for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-      //     int c_index = (n * (paramb.basis_size_radial + 1) + k) * paramb.num_types_sq;
-      //     c_index += t1 * paramb.num_types + t2;
-      //     gn12 += fn12[k] * annmb.c[c_index];
-      //   }
-      //   q[n] += gn12;
-      // }
       find_fn(paramb_int[BSR], rcinv, d12, fc12, fn12);
       for (int n = 0; n <= paramb_int[NMAXR]; ++n) {
         float gn12 = 0.0f;
@@ -2368,7 +2118,6 @@ static __global__ void find_descriptor(
         }
         q[n] += gn12;
       }
-// #endif
     }
 
     // get angular descriptors
@@ -2383,30 +2132,10 @@ static __global__ void find_descriptor(
         apply_mic(box, x12double, y12double, z12double);
         float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
         float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
-// #ifdef USE_TABLE
-//         int index_left, index_right;
-//         float weight_left, weight_right;
-//         find_index_and_weight(
-//           d12 * paramb.rcinv_angular, index_left, index_right, weight_left, weight_right);
-//         int t12 = t1 * paramb.num_types + g_type[n2];
-//         float gn12 =
-//           g_gn_angular[(index_left * paramb.num_types_sq + t12) * (paramb.n_max_angular + 1) + n] *
-//             weight_left +
-//           g_gn_angular[(index_right * paramb.num_types_sq + t12) * (paramb.n_max_angular + 1) + n] *
-//             weight_right;
-//         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
-// #else
         float fc12;
         int t2 = type_map[g_type[n2] + type_offset];
-        // float rc = paramb.rc_angular;
         float rc = paramb[RCA];
-        // if (paramb.use_typewise_cutoff) {
-        //   rc = min(
-        //     (COVALENT_RADIUS[paramb.atomic_numbers[t1]] +
-        //      COVALENT_RADIUS[paramb.atomic_numbers[t2]]) *
-        //       paramb.typewise_cutoff_angular_factor,
-        //     rc);
-        // }
+
         if (paramb_int[UTC]) {
           rc = min(
             (COVALENT_RADIUS[atomic_numbers[t1]] +
@@ -2417,22 +2146,14 @@ static __global__ void find_descriptor(
         float rcinv = 1.0f / rc;
         find_fc(rc, rcinv, d12, fc12);
         float fn12[MAX_NUM_N];
-        // find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         find_fn(paramb_int[BSA], rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
-        // for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-        //   int c_index = (n * (paramb.basis_size_angular + 1) + k) * paramb.num_types_sq;
-        //   c_index += t1 * paramb.num_types + t2 + paramb.num_c_radial;
-        //   gn12 += fn12[k] * annmb.c[c_index];
-        // }
-        // accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
         for (int k = 0; k <= paramb_int[BSA]; ++k) {
           int c_index = (n * (paramb_int[BSA] + 1) + k) * paramb_int[NTS];
           c_index += t1 * paramb_int[NT] + t2 + paramb_int[NCR];
           gn12 += fn12[k] * c[c_index];
         }
         accumulate_s(paramb_int[LMAX], d12, x12, y12, z12, gn12, s);
-// #endif
       }
       // find_q(paramb.L_max, paramb.num_L, paramb.n_max_angular + 1, n, s, q + (paramb.n_max_radial + 1));
       find_q(paramb_int[LMAX], paramb_int[NUML], paramb_int[NMAXA] + 1, n, s, q + (paramb_int[NMAXR] + 1));
@@ -2442,9 +2163,6 @@ static __global__ void find_descriptor(
     }
 
     // nomalize descriptor
-    // for (int d = 0; d < annmb.dim; ++d) {
-    //   q[d] = q[d] * paramb.q_scaler[d];
-    // }
     float* q_scaler = FLT_PTR(paramb + PTRQS);
     int ann_dim = *((int*)annmb + ANNDIM);
     for (int d = 0; d < ann_dim; ++d) {
@@ -2454,30 +2172,6 @@ static __global__ void find_descriptor(
     // get energy and energy gradient
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
 
-
-    // if (paramb.version == 5) {
-    //   apply_ann_one_layer_nep5(
-    //     annmb.dim,
-    //     annmb.num_neurons1,
-    //     annmb.w0[t1],
-    //     annmb.b0[t1],
-    //     annmb.w1[t1],
-    //     annmb.b1,
-    //     q,
-    //     F,
-    //     Fp);
-    // } else {
-    //   apply_ann_one_layer(
-    //     annmb.dim,
-    //     annmb.num_neurons1,
-    //     annmb.w0[t1],
-    //     annmb.b0[t1],
-    //     annmb.w1[t1],
-    //     annmb.b1,
-    //     q,
-    //     F,
-    //     Fp);
-    //   }
     int ann_num_neurons1 = *((int*)annmb + NNEUR);
     if (paramb_int[VERSION] == 3){
       apply_ann_one_layer(
@@ -2549,9 +2243,6 @@ static __global__ void find_force_radial(
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
   const float* __restrict__ g_Fp,
-// #ifdef USE_TABLE
-//   const float* __restrict__ g_gnp_radial,
-// #endif
   double* g_fx,
   double* g_fy,
   double* g_fz,
@@ -2594,41 +2285,8 @@ static __global__ void find_force_radial(
       float d12inv = 1.0f / d12;
       float f12[3] = {0.0f};
       float f21[3] = {0.0f};
-// #ifdef USE_TABLE
-//       int index_left, index_right;
-//       float weight_left, weight_right;
-//       find_index_and_weight(
-//         d12 * paramb.rcinv_radial, index_left, index_right, weight_left, weight_right);
-//       int t12 = t1 * paramb.num_types + t2;
-//       int t21 = t2 * paramb.num_types + t1;
-//       for (int n = 0; n <= paramb.n_max_radial; ++n) {
-//         float gnp12 =
-//           g_gnp_radial[(index_left * paramb.num_types_sq + t12) * (paramb.n_max_radial + 1) + n] *
-//             weight_left +
-//           g_gnp_radial[(index_right * paramb.num_types_sq + t12) * (paramb.n_max_radial + 1) + n] *
-//             weight_right;
-//         float gnp21 =
-//           g_gnp_radial[(index_left * paramb.num_types_sq + t21) * (paramb.n_max_radial + 1) + n] *
-//             weight_left +
-//           g_gnp_radial[(index_right * paramb.num_types_sq + t21) * (paramb.n_max_radial + 1) + n] *
-//             weight_right;
-//         float tmp12 = g_Fp[n1 + n * N] * gnp12 * d12inv;
-//         float tmp21 = g_Fp[n2 + n * N] * gnp21 * d12inv;
-//         for (int d = 0; d < 3; ++d) {
-//           f12[d] += tmp12 * r12[d];
-//           f21[d] -= tmp21 * r12[d];
-//         }
-//       }
-// #else
       float fc12, fcp12;
-      // float rc = paramb.rc_radial;
-      // if (paramb.use_typewise_cutoff) {
-      //   rc = min(
-      //     (COVALENT_RADIUS[paramb.atomic_numbers[t1]] +
-      //      COVALENT_RADIUS[paramb.atomic_numbers[t2]]) *
-      //       paramb.typewise_cutoff_radial_factor,
-      //     rc);
-      // }
+
       float rc = paramb[RCR];
       if (paramb_int[UTC]) {
         rc = min(
@@ -2641,17 +2299,10 @@ static __global__ void find_force_radial(
       find_fc_and_fcp(rc, rcinv, d12, fc12, fcp12);
       float fn12[MAX_NUM_N];
       float fnp12[MAX_NUM_N];
-      // find_fn_and_fnp(paramb.basis_size_radial, rcinv, d12, fc12, fcp12, fn12, fnp12);
       find_fn_and_fnp(paramb_int[BSR], rcinv, d12, fc12, fcp12, fn12, fnp12);
-      // for (int n = 0; n <= paramb.n_max_radial; ++n) {
       for (int n = 0; n <= paramb_int[NMAXR]; ++n) {
         float gnp12 = 0.0f;
         float gnp21 = 0.0f;
-        // for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-        //   int c_index = (n * (paramb.basis_size_radial + 1) + k) * paramb.num_types_sq;
-        //   gnp12 += fnp12[k] * annmb.c[c_index + t1 * paramb.num_types + t2];
-        //   gnp21 += fnp12[k] * annmb.c[c_index + t2 * paramb.num_types + t1];
-        // }
         for (int k = 0; k <= paramb_int[BSR]; ++k) {
           int c_index = (n * (paramb_int[BSR] + 1) + k) * paramb_int[NTS];
           gnp12 += fnp12[k] * c[c_index + t1 * paramb_int[NT] + t2];
@@ -2664,7 +2315,6 @@ static __global__ void find_force_radial(
           f21[d] -= tmp21 * r12[d];
         }
       }
-// #endif
       s_fx += f12[0] - f21[0];
       s_fy += f12[1] - f21[1];
       s_fz += f12[2] - f21[2];
@@ -2724,10 +2374,6 @@ static __global__ void find_partial_force_angular(
   const double* __restrict__ g_z,
   const float* __restrict__ g_Fp,
   const float* __restrict__ g_sum_fxyz,
-// #ifdef USE_TABLE
-//   const float* __restrict__ g_gn_angular,
-//   const float* __restrict__ g_gnp_angular,
-// #endif
   float* g_f12x,
   float* g_f12y,
   float* g_f12z)
@@ -2743,12 +2389,6 @@ static __global__ void find_partial_force_angular(
 
     float Fp[MAX_DIM_ANGULAR] = {0.0f};
     float sum_fxyz[NUM_OF_ABC * MAX_NUM_N];
-    // for (int d = 0; d < paramb.dim_angular; ++d) {
-    //   Fp[d] = g_Fp[(paramb.n_max_radial + 1 + d) * N + n1];
-    // }
-    // for (int d = 0; d < (paramb.n_max_angular + 1) * NUM_OF_ABC; ++d) {
-    //   sum_fxyz[d] = g_sum_fxyz[d * N + n1];
-    // }
     for (int d = 0; d < paramb_int[DIMA]; ++d) {
       Fp[d] = g_Fp[(paramb_int[NMAXR] + 1 + d) * N + n1];
     }
@@ -2771,34 +2411,8 @@ static __global__ void find_partial_force_angular(
       float r12[3] = {float(x12double), float(y12double), float(z12double)};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float f12[3] = {0.0f};
-// #ifdef USE_TABLE
-//       int index_left, index_right;
-//       float weight_left, weight_right;
-//       find_index_and_weight(
-//         d12 * paramb.rcinv_angular, index_left, index_right, weight_left, weight_right);
-//       int t12 = t1 * paramb.num_types + g_type[n2];
-//       for (int n = 0; n <= paramb.n_max_angular; ++n) {
-//         int index_left_all =
-//           (index_left * paramb.num_types_sq + t12) * (paramb.n_max_angular + 1) + n;
-//         int index_right_all =
-//           (index_right * paramb.num_types_sq + t12) * (paramb.n_max_angular + 1) + n;
-//         float gn12 =
-//           g_gn_angular[index_left_all] * weight_left + g_gn_angular[index_right_all] * weight_right;
-//         float gnp12 = g_gnp_angular[index_left_all] * weight_left +
-//                       g_gnp_angular[index_right_all] * weight_right;
-//         accumulate_f12(paramb.L_max, paramb.num_L, n, paramb.n_max_angular + 1, d12, r12, gn12, gnp12, Fp, sum_fxyz, f12);
-//       }
-// #else
       float fc12, fcp12;
       int t2 = type_map[g_type[n2] + type_offset];
-      // float rc = paramb.rc_angular;
-      // if (paramb.use_typewise_cutoff) {
-      //   rc = min(
-      //     (COVALENT_RADIUS[paramb.atomic_numbers[t1]] +
-      //      COVALENT_RADIUS[paramb.atomic_numbers[t2]]) *
-      //       paramb.typewise_cutoff_angular_factor,
-      //     rc);
-      // }
       float rc = paramb[RCA];
       if (paramb_int[UTC]) {
         rc = min(
@@ -2812,18 +2426,6 @@ static __global__ void find_partial_force_angular(
 
       float fn12[MAX_NUM_N];
       float fnp12[MAX_NUM_N];
-      // find_fn_and_fnp(paramb.basis_size_angular, rcinv, d12, fc12, fcp12, fn12, fnp12);
-      // for (int n = 0; n <= paramb.n_max_angular; ++n) {
-      //   float gn12 = 0.0f;
-      //   float gnp12 = 0.0f;
-      //   for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-      //     int c_index = (n * (paramb.basis_size_angular + 1) + k) * paramb.num_types_sq;
-      //     c_index += t1 * paramb.num_types + t2 + paramb.num_c_radial;
-      //     gn12 += fn12[k] * annmb.c[c_index];
-      //     gnp12 += fnp12[k] * annmb.c[c_index];
-      //   }
-      //   accumulate_f12(paramb.L_max, paramb.num_L, n, paramb.n_max_angular + 1, d12, r12, gn12, gnp12, Fp, sum_fxyz, f12);
-      // }
       find_fn_and_fnp(paramb_int[BSA], rcinv, d12, fc12, fcp12, fn12, fnp12);
       for (int n = 0; n <= paramb_int[NMAXA]; ++n) {
         float gn12 = 0.0f;
@@ -2836,7 +2438,6 @@ static __global__ void find_partial_force_angular(
         }
         accumulate_f12(paramb_int[LMAX], paramb_int[NUML], n, paramb_int[NMAXA] + 1, d12, r12, gn12, gnp12, Fp, sum_fxyz, f12);
       }
-// #endif
       g_f12x[index] = f12[0];
       g_f12y[index] = f12[1];
       g_f12z[index] = f12[2];
@@ -3036,17 +2637,7 @@ void ILP_NEP::compute(
   // nothing
 }
 
-#ifdef CODING
-static __global__ void ppe(double* p, int N1, int N2) {
 
-  int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
-  if (n1 < N2) {
-    printf("----- n1[%d] p[%lf]\n", n1, p[n1]);
-  }
-}
-#endif
-
-// TODO
 // #define CHECK_NEIGHBOR 1
 #define BLOCK_SIZE_ILP 128
 //#define USE_FIXED_NEIGHBOR 1
@@ -3062,10 +2653,6 @@ void ILP_NEP::compute_ilp(
   GPU_Vector<double> &virial_per_atom,
   std::vector<Group> &group)
 {
-#ifdef CODING
-  double p_ilp = 0.0;
-  double p_nep[10] = {0.0};
-#endif
 
   const int number_of_atoms = type.size();
   int grid_size = (N2 - N1 - 1) / BLOCK_SIZE_ILP + 1;
@@ -3078,8 +2665,6 @@ void ILP_NEP::compute_ilp(
   int* g_type_map = type_map.data();
   const int total_types = type_map_cpu.size() / num_nep;
 
-// TODO
-//   GPU_Vector<double> ilp_energy(2 * number_of_atoms, 0.0);
 
 #ifdef USE_FIXED_NEIGHBOR
   static int num_calls = 0;
@@ -3147,40 +2732,6 @@ void ILP_NEP::compute_ilp(
     ilp_NL, group_sublabel_ilp, sublayer_flag_gpu.data());
   GPU_CHECK_KERNEL
 
-
-// TODO
-#ifdef CHECK_NEIGHBOR
-  std::vector<int> cpu_nn_ilp_diff(number_of_atoms);
-  std::vector<int> cpu_nl_ilp_diff(number_of_atoms * CUDA_MAX_NL_ILP_NEP_TMD);
-  std::vector<int> cpu_nn_ilp_same(number_of_atoms);
-  std::vector<int> cpu_nl_ilp_same(number_of_atoms * MAX_ILP_NEIGHBOR_TMD);
-  ilp_data.NN.copy_to_host(cpu_nn_ilp_diff.data());
-  ilp_data.NL.copy_to_host(cpu_nl_ilp_diff.data());
-  ilp_data.ilp_NN.copy_to_host(cpu_nn_ilp_same.data());
-  ilp_data.ilp_NL.copy_to_host(cpu_nl_ilp_same.data());
-
-  std::ofstream output_file_ilp_nl("ilp_neighbor_list.out", std::ios_base::app);
-  output_file_ilp_nl << "different layer NL" << std::endl;
-  for (int i = 0; i < number_of_atoms; ++i) {
-    output_file_ilp_nl << "atom[" << i << "] " << "NN[" << cpu_nn_ilp_diff[i] << "] ";
-    for (int j = 0; j < cpu_nn_ilp_diff[i]; ++j) {
-      output_file_ilp_nl << cpu_nl_ilp_diff[i + j * number_of_atoms] << " ";
-    }
-    output_file_ilp_nl << std::endl;
-  }
-  output_file_ilp_nl <<std::endl;
-
-  output_file_ilp_nl << "same layer NL" << std::endl;
-  for (int i = 0; i < number_of_atoms; ++i) {
-    output_file_ilp_nl << "atom[" << i << "] " << "NN[" << cpu_nn_ilp_same[i] << "] ";
-    for (int j = 0; j < cpu_nn_ilp_same[i]; ++j) {
-      output_file_ilp_nl << cpu_nl_ilp_same[i + j * number_of_atoms] << " ";
-    }
-    output_file_ilp_nl << std::endl;
-  }
-  output_file_ilp_nl.close();
-#endif
-
   double *g_fx = force_per_atom.data();
   double *g_fy = force_per_atom.data() + number_of_atoms;
   double *g_fz = force_per_atom.data() + number_of_atoms * 2;
@@ -3199,40 +2750,6 @@ void ILP_NEP::compute_ilp(
     g_f12x, g_f12y, g_f12z, 
     g_f12x_ilp_neigh, g_f12y_ilp_neigh, g_f12z_ilp_neigh, NN);
   GPU_CHECK_KERNEL
-
-
-// TODO
-#ifdef CHECK_NEIGHBOR
-  std::vector<int> cpu_nn_r(number_of_atoms);
-  std::vector<int> cpu_nl_r(number_of_atoms * max_MN_radial);
-  std::vector<int> cpu_nn_a(number_of_atoms);
-  std::vector<int> cpu_nl_a(number_of_atoms * max_MN_angular);
-  nep_data.NN_radial.copy_to_host(cpu_nn_r.data());
-  nep_data.NL_radial.copy_to_host(cpu_nl_r.data());
-  nep_data.NN_angular.copy_to_host(cpu_nn_a.data());
-  nep_data.NL_angular.copy_to_host(cpu_nl_a.data());
-
-  std::ofstream output_file("nep_neighbor_list.out", std::ios_base::app);
-  output_file << "Radial" << std::endl;
-  for (int i = 0; i < number_of_atoms; ++i) {
-    output_file << "atom[" << i << "] " << "NN[" << cpu_nn_r[i] << "] ";
-    for (int j = 0; j < cpu_nn_r[i]; ++j) {
-      output_file << cpu_nl_r[i + j * number_of_atoms] << " ";
-    }
-    output_file << std::endl;
-  }
-  output_file <<std::endl;
-
-  output_file << "Angular" << std::endl;
-  for (int i = 0; i < number_of_atoms; ++i) {
-    output_file << "atom[" << i << "] " << "NN[" << cpu_nn_a[i] << "] ";
-    for (int j = 0; j < cpu_nn_a[i]; ++j) {
-      output_file << cpu_nl_a[i + j * number_of_atoms] << " ";
-    }
-    output_file << std::endl;
-  }
-  output_file.close();
-#endif
 
 
   gpu_find_force<<<grid_size, BLOCK_SIZE_ILP>>>(
@@ -3265,36 +2782,6 @@ void ILP_NEP::compute_ilp(
   GPU_CHECK_KERNEL
 
 
-// TODO
-//   std::vector<double> cpu_ilp_f(3 * number_of_atoms);
-//   force_per_atom.copy_to_host(cpu_ilp_f.data());
-//   std::ofstream output_file_ilp_f("ilp_force.out", std::ios_base::app);
-//   for (int i = 0; i < number_of_atoms; ++i) {
-//     output_file_ilp_f << "atom[" << i << "] " << "fx[" << std::setprecision(12) << cpu_ilp_f[i] << "] "
-//     << "fy[" << cpu_ilp_f[i + number_of_atoms] << "] " << "fz[" << cpu_ilp_f[i + 2 * number_of_atoms] 
-//     << "]" << std::endl;
-//   }
-// 
-// 
-//   std::vector<double> cpu_ilp_e(2 * number_of_atoms);
-//   ilp_energy.copy_to_host(cpu_ilp_e.data());
-//   std::ofstream output_file_ilp_e("ilp_energy.out", std::ios_base::app);
-//   for (int i = 0; i < number_of_atoms; ++i) {
-//     output_file_ilp_e << "atom[" << i << "] " << "att[" << std::setprecision(12) << cpu_ilp_e[i] << "] "
-//     << "rep[" << cpu_ilp_e[i + number_of_atoms] << "]" << std::endl;
-//   }
-//   output_file_ilp_e <<std::endl;
-
-#ifdef CODING
-  std::vector<double> ilp_tmp(number_of_atoms);
-  potential_per_atom.copy_to_host(ilp_tmp.data());
-  for (int i = 0; i < number_of_atoms; ++i) {
-    p_ilp += ilp_tmp[i];
-  }
-
-#endif
-
-
   reduce_force_many_body<<<grid_size, BLOCK_SIZE_ILP>>>(
     number_of_atoms,
     N1,
@@ -3319,17 +2806,6 @@ void ILP_NEP::compute_ilp(
     g_f12y_ilp_neigh,
     g_f12z_ilp_neigh);
     GPU_CHECK_KERNEL
-
-
-// TODO
-  // force_per_atom.copy_to_host(cpu_ilp_f.data());
-  // output_file_ilp_f << std::endl;
-  // for (int i = 0; i < number_of_atoms; ++i) {
-  //   output_file_ilp_f << "atom[" << i << "] " << "fx[" << std::setprecision(12) << cpu_ilp_f[i] << "] "
-  //   << "fy[" << cpu_ilp_f[i + number_of_atoms] << "] " << "fz[" << cpu_ilp_f[i + 2 * number_of_atoms] 
-  //   << "]" << std::endl;
-  // }
-  // output_file_ilp_f.close();
 
   // compute NEP
   const int BLOCK_SIZE_NEP = 64;
@@ -3378,10 +2854,6 @@ void ILP_NEP::compute_ilp(
     position_per_atom.data(),
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
-// #ifdef USE_TABLE
-//     nep_data.gn_radial.data(),
-//     nep_data.gn_angular.data(),
-// #endif
     potential_per_atom.data(),
     nep_data.Fp.data(),
     virial_per_atom.data(),
@@ -3406,9 +2878,6 @@ void ILP_NEP::compute_ilp(
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
     nep_data.Fp.data(),
-// #ifdef USE_TABLE
-//     nep_data.gnp_radial.data(),
-// #endif
     force_per_atom.data(),
     force_per_atom.data() + N,
     force_per_atom.data() + N * 2,
@@ -3434,10 +2903,6 @@ void ILP_NEP::compute_ilp(
     position_per_atom.data() + N * 2,
     nep_data.Fp.data(),
     nep_data.sum_fxyz.data(),
-// #ifdef USE_TABLE
-//     nep_data.gn_angular.data(),
-//     nep_data.gnp_angular.data(),
-// #endif
     nep_data.f12x.data(),
     nep_data.f12y.data(),
     nep_data.f12z.data());
@@ -3457,25 +2922,4 @@ void ILP_NEP::compute_ilp(
     virial_per_atom);
   GPU_CHECK_KERNEL
 
-#ifdef CODING
-  std::vector<double> nep_tmp(number_of_atoms);
-  potential_per_atom.copy_to_host(nep_tmp.data());
-  for (int i = 0; i < number_of_atoms; ++i) {
-    int nep_i = nep_map_cpu[group[nep_group_method].cpu_label[i]];
-    p_nep[nep_i] += nep_tmp[i] - ilp_tmp[i];
-  }
-
-  printf("\n========== OUTPUT ENERGYS FOR DEBUG ==========\n");
-  printf("ilp[%.12lf]\t\t", p_ilp);
-  for (int i = 0; i < num_nep; ++i) {
-    printf("nep%d[%.12lf]\t\t", i, p_nep[i]);
-  }
-  printf("\n========== OUTPUT ENERGYS FOR DEBUG ==========\n");
-
-#endif
-
-
 }
-
-
-

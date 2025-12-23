@@ -19,6 +19,7 @@ Run simulation according to the inputs in the run.in file.
 
 #include "add_efield.cuh"
 #include "add_force.cuh"
+#include "add_spring.cuh"
 #include "add_random_force.cuh"
 #include "cohesive.cuh"
 #include "electron_stop.cuh"
@@ -29,6 +30,7 @@ Run simulation according to the inputs in the run.in file.
 #include "measure/adf.cuh"
 #include "measure/angular_rdf.cuh"
 #include "measure/compute.cuh"
+#include "measure/compute_dpdt.cuh"
 #include "measure/dos.cuh"
 #include "measure/dump_beads.cuh"
 #include "measure/dump_dipole.cuh"
@@ -43,6 +45,7 @@ Run simulation according to the inputs in the run.in file.
 #include "measure/dump_thermo.cuh"
 #include "measure/dump_velocity.cuh"
 #include "measure/dump_xyz.cuh"
+#include "measure/dump_cg.cuh"
 #include "measure/extrapolation.cuh"
 #include "measure/hac.cuh"
 #include "measure/hnemd_kappa.cuh"
@@ -292,6 +295,7 @@ void Run::perform_a_run()
 
     electron_stop.compute(time_step, atom);
     add_force.compute(step, group, atom);
+    add_spring.compute(step, group, atom);
     add_random_force.compute(step, atom);
     add_efield.compute(step, group, atom, force);
 
@@ -333,6 +337,7 @@ void Run::perform_a_run()
 
   electron_stop.finalize();
   add_force.finalize();
+  add_spring.finalize();
   add_random_force.finalize();
   add_efield.finalize();
   integrate.finalize();
@@ -462,6 +467,10 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     std::unique_ptr<Property> property;
     property.reset(new Dump_XYZ(param, num_param, group, atom));
     measure.properties.emplace_back(std::move(property));
+  } else if (strcmp(param[0], "dump_cg") == 0) {
+    std::unique_ptr<Property> property;
+    property.reset(new Dump_CG(param, num_param, group));
+    measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "dump_beads") == 0) {
     std::unique_ptr<Property> property;
     property.reset(new Dump_Beads(param, num_param));
@@ -518,6 +527,10 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     std::unique_ptr<Property> property;
     property.reset(new AngularRDF(param, num_param, box, number_of_types, number_of_steps));
     measure.properties.emplace_back(std::move(property));
+  } else if (strcmp(param[0], "compute_dpdt") == 0) {
+    std::unique_ptr<Property> property;
+    property.reset(new Compute_dpdt(param, num_param));
+    measure.properties.emplace_back(std::move(property));
   } else if (strcmp(param[0], "compute_hac") == 0) {
     std::unique_ptr<Property> property;
     property.reset(new HAC(param, num_param));
@@ -562,6 +575,8 @@ void Run::parse_one_keyword(std::vector<std::string>& tokens)
     add_random_force.parse(param, num_param, atom.number_of_atoms);
   } else if (strcmp(param[0], "add_force") == 0) {
     add_force.parse(param, num_param, group);
+  } else if (strcmp(param[0], "add_spring") == 0) {
+    add_spring.parse(param, num_param, group, atom);
   } else if (strcmp(param[0], "add_efield") == 0) {
     add_efield.parse(param, num_param, group);
   } else if (strcmp(param[0], "mc") == 0) {

@@ -51,5 +51,5 @@ Some similar parameter settings and explanations can be found in the GPUMD manua
 
 ## References
 
-[1] Hongfu Huang, Junhao Peng, Kaiqi Li, Jian Zhou, Zhimei Sun, [Efficient GPU-Accelerated Training of a Neuroevolution Potential with Analytical Gradients](http://arxiv.org/abs/2507.00528),
-arXiv:2507.00528 [cond-mat.dis-nn; cond-mat.mtrl-sci; physics.comp-ph].
+[Huang2026] Hongfu Huang, Junhao Peng, Kaiqi Li, Jian Zhou, Zhimei Sun, [Efficient GPU-accelerated training of a neuroevolution potential with analytical gradients](https://doi.org/10.1016/j.cpc.2025.109994),
+Computer Physics Communications **320**, 109994 (2026).
