@@ -33,84 +33,9 @@ J. Chem. Theory Comput. 20, 3273 (2024).
 #include "utilities/nep_utilities.cuh"
 #include <cstring>
 
-static __global__ void gpu_find_neighbor_list(
-  const TNEP::ParaMB paramb,
-  const int N,
-  const int* Na,
-  const int* Na_sum,
-  const int* g_type,
-  const float* __restrict__ g_box,
-  const float* __restrict__ g_box_original,
-  const int* __restrict__ g_num_cell,
-  const float* x,
-  const float* y,
-  const float* z,
-  int* NN_radial,
-  int* NL_radial,
-  int* NN_angular,
-  int* NL_angular,
-  float* x12_radial,
-  float* y12_radial,
-  float* z12_radial,
-  float* x12_angular,
-  float* y12_angular,
-  float* z12_angular)
-{
-  int N1 = Na_sum[blockIdx.x];
-  int N2 = N1 + Na[blockIdx.x];
-  for (int n1 = N1 + threadIdx.x; n1 < N2; n1 += blockDim.x) {
-    const float* __restrict__ box = g_box + 18 * blockIdx.x;
-    const float* __restrict__ box_original = g_box_original + 9 * blockIdx.x;
-    const int* __restrict__ num_cell = g_num_cell + 3 * blockIdx.x;
-    float x1 = x[n1];
-    float y1 = y[n1];
-    float z1 = z[n1];
-    int t1 = g_type[n1];
-    int count_radial = 0;
-    int count_angular = 0;
-    for (int n2 = N1; n2 < N2; ++n2) {
-      for (int ia = 0; ia < num_cell[0]; ++ia) {
-        for (int ib = 0; ib < num_cell[1]; ++ib) {
-          for (int ic = 0; ic < num_cell[2]; ++ic) {
-            if (ia == 0 && ib == 0 && ic == 0 && n1 == n2) {
-              continue; // exclude self
-            }
-            float delta_x = box_original[0] * ia + box_original[1] * ib + box_original[2] * ic;
-            float delta_y = box_original[3] * ia + box_original[4] * ib + box_original[5] * ic;
-            float delta_z = box_original[6] * ia + box_original[7] * ib + box_original[8] * ic;
-            float x12 = x[n2] + delta_x - x1;
-            float y12 = y[n2] + delta_y - y1;
-            float z12 = z[n2] + delta_z - z1;
-            dev_apply_mic(box, x12, y12, z12);
-            float distance_square = x12 * x12 + y12 * y12 + z12 * z12;
-            int t2 = g_type[n2];
-            float rc_radial = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
-            float rc_angular = (paramb.rc_angular[t1] + paramb.rc_angular[t2]) * 0.5f;
-            if (distance_square < rc_radial * rc_radial) {
-              NL_radial[count_radial * N + n1] = n2;
-              x12_radial[count_radial * N + n1] = x12;
-              y12_radial[count_radial * N + n1] = y12;
-              z12_radial[count_radial * N + n1] = z12;
-              count_radial++;
-            }
-            if (distance_square < rc_angular * rc_angular) {
-              NL_angular[count_angular * N + n1] = n2;
-              x12_angular[count_angular * N + n1] = x12;
-              y12_angular[count_angular * N + n1] = y12;
-              z12_angular[count_angular * N + n1] = z12;
-              count_angular++;
-            }
-          }
-        }
-      }
-    }
-    NN_radial[n1] = count_radial;
-    NN_angular[n1] = count_angular;
-  }
-}
-
 static __global__ void find_descriptors_radial(
   const int N,
+  const int* g_NN_sum,
   const int* g_NN,
   const int* g_NL,
   const TNEP::ParaMB paramb,
@@ -127,7 +52,7 @@ static __global__ void find_descriptors_radial(
     int neighbor_number = g_NN[n1];
     float q[MAX_NUM_N] = {0.0f};
     for (int i1 = 0; i1 < neighbor_number; ++i1) {
-      int index = n1 + N * i1;
+      int index = g_NN_sum[n1] + i1;
       int n2 = g_NL[index];
       float x12 = g_x12[index];
       float y12 = g_y12[index];
@@ -159,6 +84,7 @@ static __global__ void find_descriptors_radial(
 
 static __global__ void find_descriptors_angular(
   const int N,
+  const int* g_NN_sum,
   const int* g_NN,
   const int* g_NL,
   const TNEP::ParaMB paramb,
@@ -179,8 +105,8 @@ static __global__ void find_descriptors_angular(
     for (int n = 0; n <= paramb.n_max_angular; ++n) {
       float s[NUM_OF_ABC] = {0.0f};
       for (int i1 = 0; i1 < neighbor_number; ++i1) {
-        int index = n1 + N * i1;
-        int n2 = g_NL[n1 + N * i1];
+        int index = g_NN_sum[n1] + i1;
+        int n2 = g_NL[index];
         float x12 = g_x12[index];
         float y12 = g_y12[index];
         float z12 = g_z12[index];
@@ -200,7 +126,7 @@ static __global__ void find_descriptors_angular(
         }
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
       }
-      find_q(paramb.L_max, paramb.num_L, paramb.n_max_angular + 1, n, s, q);
+      find_q(paramb.L_max, paramb.has_q_222, paramb.has_q_1111, paramb.has_q_112, paramb.has_q_123, paramb.has_q_233, paramb.has_q_134, paramb.n_max_angular + 1, n, s, q);
       for (int abc = 0; abc < NUM_OF_ABC; ++abc) {
         g_sum_fxyz[(n * NUM_OF_ABC + abc) * N + n1] = s[abc];
       }
@@ -232,11 +158,29 @@ TNEP::TNEP(
   paramb.n_max_radial = para.n_max_radial;
   paramb.n_max_angular = para.n_max_angular;
   paramb.L_max = para.L_max;
+  paramb.has_q_222 = para.has_q_222;
+  paramb.has_q_1111 = para.has_q_1111;
+  paramb.has_q_112 = para.has_q_112;
+  paramb.has_q_123 = para.has_q_123;
+  paramb.has_q_233 = para.has_q_233;
+  paramb.has_q_134 = para.has_q_134;
   paramb.num_L = paramb.L_max;
-  if (para.L_max_4body == 2) {
+  if (para.has_q_222) {
     paramb.num_L += 1;
   }
-  if (para.L_max_5body == 1) {
+  if (para.has_q_1111) {
+    paramb.num_L += 1;
+  }
+  if (para.has_q_112) {
+    paramb.num_L += 1;
+  }
+  if (para.has_q_123) {
+    paramb.num_L += 1;
+  }
+  if (para.has_q_233) {
+    paramb.num_L += 1;
+  }
+  if (para.has_q_134) {
     paramb.num_L += 1;
   }
   paramb.dim_angular = (para.n_max_angular + 1) * paramb.num_L;
@@ -252,17 +196,15 @@ TNEP::TNEP(
     annmb[device_id].dim = para.dim;
     annmb[device_id].num_neurons1 = para.num_neurons1;
     annmb[device_id].num_para = para.number_of_variables;
+    annmb[device_id].num_hidden_layers = para.num_hidden_layers;
+    if (para.num_hidden_layers == 2) {
+      annmb[device_id].num_neurons2 = para.num_neurons2;
+      annmb[device_id].one_ann_no_bias = (annmb[device_id].dim + 1) * annmb[device_id].num_neurons1 +
+        (annmb[device_id].num_neurons1 + 2) * annmb[device_id].num_neurons2;
+    } else {
+      annmb[device_id].one_ann_no_bias = (annmb[device_id].dim + 2) * annmb[device_id].num_neurons1;
+    }
 
-    nep_data[device_id].NN_radial.resize(N);
-    nep_data[device_id].NN_angular.resize(N);
-    nep_data[device_id].NL_radial.resize(N_times_max_NN_radial);
-    nep_data[device_id].NL_angular.resize(N_times_max_NN_angular);
-    nep_data[device_id].x12_radial.resize(N_times_max_NN_radial);
-    nep_data[device_id].y12_radial.resize(N_times_max_NN_radial);
-    nep_data[device_id].z12_radial.resize(N_times_max_NN_radial);
-    nep_data[device_id].x12_angular.resize(N_times_max_NN_angular);
-    nep_data[device_id].y12_angular.resize(N_times_max_NN_angular);
-    nep_data[device_id].z12_angular.resize(N_times_max_NN_angular);
     nep_data[device_id].descriptors.resize(N * annmb[device_id].dim);
     nep_data[device_id].Fp.resize(N * annmb[device_id].dim);
     nep_data[device_id].sum_fxyz.resize(N * (paramb.n_max_angular + 1) * NUM_OF_ABC);
@@ -274,35 +216,18 @@ void TNEP::update_potential(Parameters& para, float* parameters, ANN& ann)
 {
   float* pointer = parameters;
   for (int t = 0; t < paramb.num_types; ++t) {
-    if (t > 0 && paramb.version == 3) { // Use the same set of NN parameters for NEP3
-      pointer -= (ann.dim + 2) * ann.num_neurons1;
-    }
-    ann.w0[t] = pointer;
-    pointer += ann.num_neurons1 * ann.dim;
-    ann.b0[t] = pointer;
-    pointer += ann.num_neurons1;
-    ann.w1[t] = pointer;
-    pointer += ann.num_neurons1;
-    if (para.version == 5) {
-      pointer += 1; // one extra bias for NEP5 stored in ann.w1[t]
-    }
+    ann.wb[t] = pointer;
+    pointer += ann.one_ann_no_bias;
   }
-  ann.b1 = pointer;
+  ann.b = pointer;
   pointer += 1;
 
   if (para.train_mode == 2) {
     for (int t = 0; t < paramb.num_types; ++t) {
-      if (t > 0 && paramb.version == 3) { // Use the same set of NN parameters for NEP3
-        pointer -= (ann.dim + 2) * ann.num_neurons1;
-      }
-      ann.w0_pol[t] = pointer;
-      pointer += ann.num_neurons1 * ann.dim;
-      ann.b0_pol[t] = pointer;
-      pointer += ann.num_neurons1;
-      ann.w1_pol[t] = pointer;
-      pointer += ann.num_neurons1;
+      ann.wb_pol[t] = pointer;
+      pointer += ann.one_ann_no_bias;
     }
-    ann.b1_pol = pointer;
+    ann.b_pol = pointer;
     pointer += 1;
   }
 
@@ -370,25 +295,31 @@ static __global__ void apply_ann(
     // get energy and energy gradient
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
 
-    if (paramb.version == 5) {
-      apply_ann_one_layer_nep5(
+    const int neu1 = annmb.num_neurons1;
+    const int neu1_dim = neu1 * annmb.dim;
+    if (annmb.num_hidden_layers == 2) {
+      const int neu2 = annmb.num_neurons2;
+      apply_ann_two_layers(
         annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0[type],
-        annmb.b0[type],
-        annmb.w1[type],
-        annmb.b1,
+        neu1,
+        neu2,
+        annmb.wb[type],
+        annmb.wb[type] + neu1_dim,
+        annmb.wb[type] + neu1 * (annmb.dim + 1),
+        annmb.wb[type] + neu1 * (annmb.dim + 1 + neu2),
+        annmb.wb[type] + neu1 * (annmb.dim + 1 + neu2) + neu2,
+        annmb.b,
         q,
         F,
         Fp);
     } else {
       apply_ann_one_layer(
         annmb.dim,
-        annmb.num_neurons1,
-        annmb.w0[type],
-        annmb.b0[type],
-        annmb.w1[type],
-        annmb.b1,
+        neu1,
+        annmb.wb[type],
+        annmb.wb[type] + neu1_dim,
+        annmb.wb[type] + neu1 * (annmb.dim + 1),
+        annmb.b,
         q,
         F,
         Fp);
@@ -423,16 +354,35 @@ static __global__ void apply_ann_pol(
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
 
     // scalar part
-    apply_ann_one_layer(
-      annmb.dim,
-      annmb.num_neurons1,
-      annmb.w0_pol[type],
-      annmb.b0_pol[type],
-      annmb.w1_pol[type],
-      annmb.b1_pol,
-      q,
-      F,
-      Fp);
+    const int neu1 = annmb.num_neurons1;
+    const int neu1_dim = neu1 * annmb.dim;
+    const int neu2 = annmb.num_neurons2;
+    if (annmb.num_hidden_layers == 2) {
+      apply_ann_two_layers(
+        annmb.dim,
+        neu1,
+        neu2,
+        annmb.wb_pol[type],
+        annmb.wb_pol[type] + neu1_dim,
+        annmb.wb_pol[type] + neu1 * (annmb.dim + 1),
+        annmb.wb_pol[type] + neu1 * (annmb.dim + 1 + neu2),
+        annmb.wb_pol[type] + neu1 * (annmb.dim + 1 + neu2) + neu2,
+        annmb.b_pol,
+        q,
+        F,
+        Fp);
+    } else {
+      apply_ann_one_layer(
+        annmb.dim,
+        neu1,
+        annmb.wb_pol[type],
+        annmb.wb_pol[type] + neu1_dim,
+        annmb.wb_pol[type] + neu1 * (annmb.dim + 1),
+        annmb.b_pol,
+        q,
+        F,
+        Fp);
+    }
     g_virial[n1] = F;
     g_virial[n1 + N] = F;
     g_virial[n1 + N * 2] = F;
@@ -441,16 +391,32 @@ static __global__ void apply_ann_pol(
     for (int d = 0; d < annmb.dim; ++d) {
       Fp[d] = 0.0f;
     }
-    apply_ann_one_layer(
-      annmb.dim,
-      annmb.num_neurons1,
-      annmb.w0[type],
-      annmb.b0[type],
-      annmb.w1[type],
-      annmb.b1,
-      q,
-      F,
-      Fp);
+    if (annmb.num_hidden_layers == 2) {
+      apply_ann_two_layers(
+        annmb.dim,
+        neu1,
+        neu2,
+        annmb.wb[type],
+        annmb.wb[type] + neu1_dim,
+        annmb.wb[type] + neu1 * (annmb.dim + 1),
+        annmb.wb[type] + neu1 * (annmb.dim + 1 + neu2),
+        annmb.wb[type] + neu1 * (annmb.dim + 1 + neu2) + neu2,
+        annmb.b,
+        q,
+        F,
+        Fp);
+    } else {
+      apply_ann_one_layer(
+        annmb.dim,
+        neu1,
+        annmb.wb[type],
+        annmb.wb[type] + neu1_dim,
+        annmb.wb[type] + neu1 * (annmb.dim + 1),
+        annmb.b,
+        q,
+        F,
+        Fp);
+    }
 
     for (int d = 0; d < annmb.dim; ++d) {
       g_Fp[n1 + d * N] = Fp[d] * g_q_scaler[d];
@@ -475,6 +441,7 @@ static __global__ void zero_force(
 static __global__ void find_force_radial(
   const bool is_dipole,
   const int N,
+  const int* g_NN_sum,
   const int* g_NN,
   const int* g_NL,
   const TNEP::ParaMB paramb,
@@ -500,7 +467,7 @@ static __global__ void find_force_radial(
     float s_virial_zx = 0.0f;
     int t1 = g_type[n1];
     for (int i1 = 0; i1 < neighbor_number; ++i1) {
-      int index = i1 * N + n1;
+      int index = g_NN_sum[n1] + i1;
       int n2 = g_NL[index];
       int t2 = g_type[n2];
       float r12[3] = {g_x12[index], g_y12[index], g_z12[index]};
@@ -561,6 +528,7 @@ static __global__ void find_force_radial(
 static __global__ void find_force_angular(
   const bool is_dipole,
   const int N,
+  const int* g_NN_sum,
   const int* g_NN,
   const int* g_NL,
   const TNEP::ParaMB paramb,
@@ -597,7 +565,7 @@ static __global__ void find_force_angular(
     int neighbor_number = g_NN[n1];
     int t1 = g_type[n1];
     for (int i1 = 0; i1 < neighbor_number; ++i1) {
-      int index = i1 * N + n1;
+      int index = g_NN_sum[n1] + i1;
       int n2 = g_NL[index];
       float r12[3] = {g_x12[index], g_y12[index], g_z12[index]};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
@@ -620,7 +588,8 @@ static __global__ void find_force_angular(
           gn12 += fn12[k] * annmb.c[c_index];
           gnp12 += fnp12[k] * annmb.c[c_index];
         }
-        accumulate_f12(paramb.L_max, paramb.num_L, n, paramb.n_max_angular + 1, d12, r12, gn12, gnp12, Fp, sum_fxyz, f12);
+        accumulate_f12(paramb.L_max, paramb.has_q_222, paramb.has_q_1111, paramb.has_q_112, paramb.has_q_123, paramb.has_q_233, paramb.has_q_134, 
+          paramb.num_L, n, paramb.n_max_angular + 1, d12, r12, gn12, gnp12, Fp, sum_fxyz, f12);
       }
 
       atomicAdd(&g_fx[n1], f12[0]);
@@ -658,7 +627,6 @@ void TNEP::find_force(
   const float* parameters,
   std::vector<Dataset>& dataset,
   bool calculate_q_scaler,
-  bool calculate_neighbor,
   int device_in_this_iter)
 {
 
@@ -674,55 +642,31 @@ void TNEP::find_force(
     const int block_size = 32;
     const int grid_size = (dataset[device_id].N - 1) / block_size + 1;
 
-    if (calculate_neighbor) {
-      gpu_find_neighbor_list<<<dataset[device_id].Nc, 256>>>(
-        paramb,
-        dataset[device_id].N,
-        dataset[device_id].Na.data(),
-        dataset[device_id].Na_sum.data(),
-        dataset[device_id].type.data(),
-        dataset[device_id].box.data(),
-        dataset[device_id].box_original.data(),
-        dataset[device_id].num_cell.data(),
-        dataset[device_id].r.data(),
-        dataset[device_id].r.data() + dataset[device_id].N,
-        dataset[device_id].r.data() + dataset[device_id].N * 2,
-        nep_data[device_id].NN_radial.data(),
-        nep_data[device_id].NL_radial.data(),
-        nep_data[device_id].NN_angular.data(),
-        nep_data[device_id].NL_angular.data(),
-        nep_data[device_id].x12_radial.data(),
-        nep_data[device_id].y12_radial.data(),
-        nep_data[device_id].z12_radial.data(),
-        nep_data[device_id].x12_angular.data(),
-        nep_data[device_id].y12_angular.data(),
-        nep_data[device_id].z12_angular.data());
-      GPU_CHECK_KERNEL
-    }
-
     find_descriptors_radial<<<grid_size, block_size>>>(
       dataset[device_id].N,
-      nep_data[device_id].NN_radial.data(),
-      nep_data[device_id].NL_radial.data(),
+      dataset[device_id].NN_radial_sum.data(),
+      dataset[device_id].NN_radial.data(),
+      dataset[device_id].NL_radial.data(),
       paramb,
       annmb[device_id],
       dataset[device_id].type.data(),
-      nep_data[device_id].x12_radial.data(),
-      nep_data[device_id].y12_radial.data(),
-      nep_data[device_id].z12_radial.data(),
+      dataset[device_id].x12_radial.data(),
+      dataset[device_id].y12_radial.data(),
+      dataset[device_id].z12_radial.data(),
       nep_data[device_id].descriptors.data());
     GPU_CHECK_KERNEL
 
     find_descriptors_angular<<<grid_size, block_size>>>(
       dataset[device_id].N,
-      nep_data[device_id].NN_angular.data(),
-      nep_data[device_id].NL_angular.data(),
+      dataset[device_id].NN_angular_sum.data(),
+      dataset[device_id].NN_angular.data(),
+      dataset[device_id].NL_angular.data(),
       paramb,
       annmb[device_id],
       dataset[device_id].type.data(),
-      nep_data[device_id].x12_angular.data(),
-      nep_data[device_id].y12_angular.data(),
-      nep_data[device_id].z12_angular.data(),
+      dataset[device_id].x12_angular.data(),
+      dataset[device_id].y12_angular.data(),
+      dataset[device_id].z12_angular.data(),
       nep_data[device_id].descriptors.data(),
       nep_data[device_id].sum_fxyz.data());
     GPU_CHECK_KERNEL
@@ -773,14 +717,15 @@ void TNEP::find_force(
     find_force_radial<<<grid_size, block_size>>>(
       is_dipole,
       dataset[device_id].N,
-      nep_data[device_id].NN_radial.data(),
-      nep_data[device_id].NL_radial.data(),
+      dataset[device_id].NN_radial_sum.data(),
+      dataset[device_id].NN_radial.data(),
+      dataset[device_id].NL_radial.data(),
       paramb,
       annmb[device_id],
       dataset[device_id].type.data(),
-      nep_data[device_id].x12_radial.data(),
-      nep_data[device_id].y12_radial.data(),
-      nep_data[device_id].z12_radial.data(),
+      dataset[device_id].x12_radial.data(),
+      dataset[device_id].y12_radial.data(),
+      dataset[device_id].z12_radial.data(),
       nep_data[device_id].Fp.data(),
       dataset[device_id].force.data(),
       dataset[device_id].force.data() + dataset[device_id].N,
@@ -791,14 +736,15 @@ void TNEP::find_force(
     find_force_angular<<<grid_size, block_size>>>(
       is_dipole,
       dataset[device_id].N,
-      nep_data[device_id].NN_angular.data(),
-      nep_data[device_id].NL_angular.data(),
+      dataset[device_id].NN_angular_sum.data(),
+      dataset[device_id].NN_angular.data(),
+      dataset[device_id].NL_angular.data(),
       paramb,
       annmb[device_id],
       dataset[device_id].type.data(),
-      nep_data[device_id].x12_angular.data(),
-      nep_data[device_id].y12_angular.data(),
-      nep_data[device_id].z12_angular.data(),
+      dataset[device_id].x12_angular.data(),
+      dataset[device_id].y12_angular.data(),
+      dataset[device_id].z12_angular.data(),
       nep_data[device_id].Fp.data(),
       nep_data[device_id].sum_fxyz.data(),
       dataset[device_id].force.data(),

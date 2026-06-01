@@ -79,19 +79,12 @@ NEP::NEP(const char* file_potential, const int num_atoms)
     exit(1);
   }
 
-  // nep3 1 C
   std::vector<std::string> tokens = get_tokens(input);
   if (tokens.size() < 3) {
     std::cout << "The first line of nep.txt should have at least 3 items." << std::endl;
     exit(1);
   }
-  if (tokens[0] == "nep3") {
-    paramb.version = 3;
-    zbl.enabled = false;
-  } else if (tokens[0] == "nep3_zbl") {
-    paramb.version = 3;
-    zbl.enabled = true;
-  } else if (tokens[0] == "nep4") {
+  if (tokens[0] == "nep4") {
     paramb.version = 4;
     zbl.enabled = false;
   } else if (tokens[0] == "nep4_zbl") {
@@ -103,35 +96,22 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   } else if (tokens[0] == "nep5_zbl") {
     paramb.version = 5;
     zbl.enabled = true;
-  } else if (tokens[0] == "nep3_temperature") {
-    paramb.version = 3;
-    paramb.model_type = 3;
-  } else if (tokens[0] == "nep3_zbl_temperature") {
-    paramb.version = 3;
-    paramb.model_type = 3;
-    zbl.enabled = true;
-  } else if (tokens[0] == "nep4_temperature") {
+  }  else if (tokens[0] == "nep4_temperature") {
     paramb.version = 4;
     paramb.model_type = 3;
   } else if (tokens[0] == "nep4_zbl_temperature") {
     paramb.version = 4;
     paramb.model_type = 3;
     zbl.enabled = true;
-  } else if (tokens[0] == "nep3_dipole") {
-    paramb.version = 3;
-    paramb.model_type = 1;
   } else if (tokens[0] == "nep4_dipole") {
     paramb.version = 4;
     paramb.model_type = 1;
-  } else if (tokens[0] == "nep3_polarizability") {
-    paramb.version = 3;
-    paramb.model_type = 2;
   } else if (tokens[0] == "nep4_polarizability") {
     paramb.version = 4;
     paramb.model_type = 2;
   } else {
     std::cout << tokens[0]
-              << " is an unsupported NEP model. We only support NEP3 and NEP4 models now."
+              << " is an unsupported NEP model. We only support NEP4 models now."
               << std::endl;
     exit(1);
   }
@@ -255,8 +235,8 @@ NEP::NEP(const char* file_potential, const int num_atoms)
 
   // l_max
   tokens = get_tokens(input);
-  if (tokens.size() != 4) {
-    std::cout << "This line should be l_max l_max_3body l_max_4body l_max_5body." << std::endl;
+  if (tokens.size() < 4) {
+    std::cout << "This line should be l_max l_max_3body has_q_222 has_q_1111 [has_q_112] [has_q_123] [has_q_233] [has_q_134]." << std::endl;
     exit(1);
   }
 
@@ -264,14 +244,42 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   printf("    l_max_3body = %d.\n", paramb.L_max);
   paramb.num_L = paramb.L_max;
 
-  int L_max_4body = get_int_from_token(tokens[2], __FILE__, __LINE__);
-  int L_max_5body = get_int_from_token(tokens[3], __FILE__, __LINE__);
-  printf("    l_max_4body = %d.\n", L_max_4body);
-  printf("    l_max_5body = %d.\n", L_max_5body);
-  if (L_max_4body == 2) {
+  paramb.has_q_222 = get_int_from_token(tokens[2], __FILE__, __LINE__);
+  paramb.has_q_1111 = get_int_from_token(tokens[3], __FILE__, __LINE__);
+  if (tokens.size() >= 5) {
+    paramb.has_q_112 = get_int_from_token(tokens[4], __FILE__, __LINE__);
+  }
+  if (tokens.size() >= 6) {
+    paramb.has_q_123 = get_int_from_token(tokens[5], __FILE__, __LINE__);
+  }
+  if (tokens.size() >= 7) {
+    paramb.has_q_233 = get_int_from_token(tokens[6], __FILE__, __LINE__);
+  }
+  if (tokens.size() >= 8) {
+    paramb.has_q_134 = get_int_from_token(tokens[7], __FILE__, __LINE__);
+  }
+  printf("    has_q_222 = %d.\n", paramb.has_q_222);
+  printf("    has_q_1111 = %d.\n", paramb.has_q_1111);
+  printf("    has_q_112 = %d.\n", paramb.has_q_112);
+  printf("    has_q_123 = %d.\n", paramb.has_q_123);
+  printf("    has_q_233 = %d.\n", paramb.has_q_233);
+  printf("    has_q_134 = %d.\n", paramb.has_q_134);
+  if (paramb.has_q_222) {
     paramb.num_L += 1;
   }
-  if (L_max_5body == 1) {
+  if (paramb.has_q_1111) {
+    paramb.num_L += 1;
+  }
+  if (paramb.has_q_112) {
+    paramb.num_L += 1;
+  }
+  if (paramb.has_q_123) {
+    paramb.num_L += 1;
+  }
+  if (paramb.has_q_233) {
+    paramb.num_L += 1;
+  }
+  if (paramb.has_q_134) {
     paramb.num_L += 1;
   }
 
@@ -295,11 +303,9 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   rc = paramb.rc_radial_max; // largest cutoff
   paramb.num_types_sq = paramb.num_types * paramb.num_types;
 
-  if (paramb.version == 3) {
-    annmb.num_para_ann = (annmb.dim + 2) * annmb.num_neurons1 + 1;
-  } else if (paramb.version == 4) {
+  if (paramb.version == 4) {
     annmb.num_para_ann = (annmb.dim + 2) * annmb.num_neurons1 * paramb.num_types + 1;
-  } else {
+  } else if (paramb.version == 5) {
     annmb.num_para_ann = ((annmb.dim + 2) * annmb.num_neurons1 + 1) * paramb.num_types + 1;
   }
   if (paramb.model_type == 2) {
@@ -341,6 +347,7 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   nep_data.f12x.resize(num_atoms * paramb.MN_angular);
   nep_data.f12y.resize(num_atoms * paramb.MN_angular);
   nep_data.f12z.resize(num_atoms * paramb.MN_angular);
+  neighbor.initialize(rc, num_atoms, paramb.MN_radial);
   nep_data.NN_radial.resize(num_atoms);
   nep_data.NL_radial.resize(num_atoms * paramb.MN_radial);
   nep_data.NN_angular.resize(num_atoms);
@@ -348,9 +355,6 @@ NEP::NEP(const char* file_potential, const int num_atoms)
   nep_data.Fp.resize(num_atoms * annmb.dim);
   nep_data.sum_fxyz.resize(
     num_atoms * (paramb.n_max_angular + 1) * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1));
-  nep_data.cell_count.resize(num_atoms);
-  nep_data.cell_count_sum.resize(num_atoms);
-  nep_data.cell_contents.resize(num_atoms);
   nep_data.cpu_NN_radial.resize(num_atoms);
   nep_data.cpu_NN_angular.resize(num_atoms);
 
@@ -367,9 +371,6 @@ void NEP::update_potential(float* parameters, ANN& ann)
 {
   float* pointer = parameters;
   for (int t = 0; t < paramb.num_types; ++t) {
-    if (t > 0 && paramb.version == 3) { // Use the same set of NN parameters for NEP3
-      pointer -= (ann.dim + 2) * ann.num_neurons1;
-    }
     ann.w0[t] = pointer;
     pointer += ann.num_neurons1 * ann.dim;
     ann.b0[t] = pointer;
@@ -386,9 +387,6 @@ void NEP::update_potential(float* parameters, ANN& ann)
   // Possibly read polarizability parameters, which are placed after the regular nep parameters.
   if (paramb.model_type == 2) {
     for (int t = 0; t < paramb.num_types; ++t) {
-      if (t > 0 && paramb.version == 3) { // Use the same set of NN parameters for NEP3
-        pointer -= (ann.dim + 2) * ann.num_neurons1;
-      }
       ann.w0_pol[t] = pointer;
       pointer += ann.num_neurons1 * ann.dim;
       ann.b0_pol[t] = pointer;
@@ -408,17 +406,13 @@ static __global__ void find_neighbor_list_large_box(
   const int N,
   const int N1,
   const int N2,
-  const int nx,
-  const int ny,
-  const int nz,
   const Box box,
   const int* g_type,
-  const int* __restrict__ g_cell_count,
-  const int* __restrict__ g_cell_count_sum,
-  const int* __restrict__ g_cell_contents,
   const double* __restrict__ g_x,
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
+  const int* __restrict__ g_NN_global,
+  const int* __restrict__ g_NL_global,
   int* g_NN_radial,
   int* g_NL_radial,
   int* g_NN_angular,
@@ -436,77 +430,22 @@ static __global__ void find_neighbor_list_large_box(
   int count_radial = 0;
   int count_angular = 0;
 
-  int cell_id;
-  int cell_id_x;
-  int cell_id_y;
-  int cell_id_z;
-  find_cell_id(
-    box,
-    x1,
-    y1,
-    z1,
-    2.0f * paramb.rc_radial_max_inv,
-    nx,
-    ny,
-    nz,
-    cell_id_x,
-    cell_id_y,
-    cell_id_z,
-    cell_id);
-
-  const int z_lim = box.pbc_z ? 2 : 0;
-  const int y_lim = box.pbc_y ? 2 : 0;
-  const int x_lim = box.pbc_x ? 2 : 0;
-
-  for (int zz = -z_lim; zz <= z_lim; ++zz) {
-    for (int yy = -y_lim; yy <= y_lim; ++yy) {
-      for (int xx = -x_lim; xx <= x_lim; ++xx) {
-        int neighbor_cell = cell_id + zz * nx * ny + yy * nx + xx;
-        if (cell_id_x + xx < 0)
-          neighbor_cell += nx;
-        if (cell_id_x + xx >= nx)
-          neighbor_cell -= nx;
-        if (cell_id_y + yy < 0)
-          neighbor_cell += ny * nx;
-        if (cell_id_y + yy >= ny)
-          neighbor_cell -= ny * nx;
-        if (cell_id_z + zz < 0)
-          neighbor_cell += nz * ny * nx;
-        if (cell_id_z + zz >= nz)
-          neighbor_cell -= nz * ny * nx;
-
-        const int num_atoms_neighbor_cell = g_cell_count[neighbor_cell];
-        const int num_atoms_previous_cells = g_cell_count_sum[neighbor_cell];
-
-        for (int m = 0; m < num_atoms_neighbor_cell; ++m) {
-          const int n2 = g_cell_contents[num_atoms_previous_cells + m];
-
-          if (n2 < N1 || n2 >= N2 || n1 == n2) {
-            continue;
-          }
-
-          double x12double = g_x[n2] - x1;
-          double y12double = g_y[n2] - y1;
-          double z12double = g_z[n2] - z1;
-          apply_mic(box, x12double, y12double, z12double);
-          float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
-          float d12_square = x12 * x12 + y12 * y12 + z12 * z12;
-
-          int t2 = g_type[n2];
-          float rc_radial = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
-          float rc_angular = (paramb.rc_angular[t1] + paramb.rc_angular[t2]) * 0.5f;
-
-          if (d12_square >= rc_radial * rc_radial) {
-            continue;
-          }
-
-          g_NL_radial[count_radial++ * N + n1] = n2;
-
-          if (d12_square < rc_angular * rc_angular) {
-            g_NL_angular[count_angular++ * N + n1] = n2;
-          }
-        }
-      }
+  for (int i1 = 0; i1 < g_NN_global[n1]; ++i1) {
+    int n2 = g_NL_global[n1 + N * i1];
+    float x12 = g_x[n2] - x1;
+    float y12 = g_y[n2] - y1;
+    float z12 = g_z[n2] - z1;
+    apply_mic(box, x12, y12, z12);
+    float d12_square = x12 * x12 + y12 * y12 + z12 * z12;
+    int t2 = g_type[n2];
+    float rc_radial = (paramb.rc_radial[t1] + paramb.rc_radial[t2]) * 0.5f;
+    float rc_angular = (paramb.rc_angular[t1] + paramb.rc_angular[t2]) * 0.5f;
+    if (d12_square >= rc_radial * rc_radial) {
+      continue;
+    }
+    g_NL_radial[count_radial++ * N + n1] = n2;
+    if (d12_square < rc_angular * rc_angular) {
+      g_NL_angular[count_angular++ * N + n1] = n2;
     }
   }
 
@@ -549,11 +488,10 @@ static __global__ void find_descriptor(
     // get radial descriptors
     for (int i1 = 0; i1 < g_NN[n1]; ++i1) {
       int n2 = g_NL[n1 + N * i1];
-      double x12double = g_x[n2] - x1;
-      double y12double = g_y[n2] - y1;
-      double z12double = g_z[n2] - z1;
-      apply_mic(box, x12double, y12double, z12double);
-      float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
+      apply_mic(box, x12, y12, z12);
       float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
       float fc12;
       int t2 = g_type[n2];
@@ -579,11 +517,10 @@ static __global__ void find_descriptor(
       float s[NUM_OF_ABC] = {0.0f};
       for (int i1 = 0; i1 < g_NN_angular[n1]; ++i1) {
         int n2 = g_NL_angular[n1 + N * i1];
-        double x12double = g_x[n2] - x1;
-        double y12double = g_y[n2] - y1;
-        double z12double = g_z[n2] - z1;
-        apply_mic(box, x12double, y12double, z12double);
-        float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
+        float x12 = g_x[n2] - x1;
+        float y12 = g_y[n2] - y1;
+        float z12 = g_z[n2] - z1;
+        apply_mic(box, x12, y12, z12);
         float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
         float fc12;
         int t2 = g_type[n2];
@@ -601,7 +538,8 @@ static __global__ void find_descriptor(
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
       }
       find_q(
-        paramb.L_max, paramb.num_L, paramb.n_max_angular + 1, n, s, q + (paramb.n_max_radial + 1));
+        paramb.L_max, paramb.has_q_222, paramb.has_q_1111, paramb.has_q_112, paramb.has_q_123, paramb.has_q_233, paramb.has_q_134,
+        paramb.n_max_angular + 1, n, s, q + (paramb.n_max_radial + 1));
       for (int abc = 0; abc < (paramb.L_max + 1) * (paramb.L_max + 1) - 1; ++abc) {
         g_sum_fxyz[(n * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1) + abc) * N + n1] = s[abc];
       }
@@ -726,11 +664,11 @@ static __global__ void find_force_radial(
     for (int i1 = 0; i1 < g_NN[n1]; ++i1) {
       int n2 = g_NL[n1 + N * i1];
       int t2 = g_type[n2];
-      double x12double = g_x[n2] - x1;
-      double y12double = g_y[n2] - y1;
-      double z12double = g_z[n2] - z1;
-      apply_mic(box, x12double, y12double, z12double);
-      float r12[3] = {float(x12double), float(y12double), float(z12double)};
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
+      apply_mic(box, x12, y12, z12);
+      float r12[3] = {x12, y12, z12};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float d12inv = 1.0f / d12;
       float f12[3] = {0.0f};
@@ -762,7 +700,7 @@ static __global__ void find_force_radial(
       s_fz += f12[2] - f21[2];
       if (is_dipole) {
         // The dipole is proportional to minus the sum of the virials times r12
-        double r12_square = r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
+        float r12_square = r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2];
         s_sxx -= r12_square * f21[0];
         s_syy -= r12_square * f21[1];
         s_szz -= r12_square * f21[2];
@@ -838,11 +776,11 @@ static __global__ void find_partial_force_angular(
     for (int i1 = 0; i1 < g_NN_angular[n1]; ++i1) {
       int index = i1 * N + n1;
       int n2 = g_NL_angular[n1 + N * i1];
-      double x12double = g_x[n2] - x1;
-      double y12double = g_y[n2] - y1;
-      double z12double = g_z[n2] - z1;
-      apply_mic(box, x12double, y12double, z12double);
-      float r12[3] = {float(x12double), float(y12double), float(z12double)};
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
+      apply_mic(box, x12, y12, z12);
+      float r12[3] = {x12, y12, z12};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float f12[3] = {0.0f};
       float fc12, fcp12;
@@ -865,6 +803,7 @@ static __global__ void find_partial_force_angular(
         }
         accumulate_f12(
           paramb.L_max,
+          paramb.has_q_222, paramb.has_q_1111, paramb.has_q_112, paramb.has_q_123, paramb.has_q_233, paramb.has_q_134,
           paramb.num_L,
           n,
           paramb.n_max_angular + 1,
@@ -925,11 +864,11 @@ static __global__ void find_force_ZBL(
     float pow_zi = pow(float(zi), 0.23f);
     for (int i1 = 0; i1 < g_NN[n1]; ++i1) {
       int n2 = g_NL[n1 + N * i1];
-      double x12double = g_x[n2] - x1;
-      double y12double = g_y[n2] - y1;
-      double z12double = g_z[n2] - z1;
-      apply_mic(box, x12double, y12double, z12double);
-      float r12[3] = {float(x12double), float(y12double), float(z12double)};
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
+      apply_mic(box, x12, y12, z12);
+      float r12[3] = {x12, y12, z12};
       float d12 = sqrt(r12[0] * r12[0] + r12[1] * r12[1] + r12[2] * r12[2]);
       float d12inv = 1.0f / d12;
       float f, fp;
@@ -1010,36 +949,24 @@ void NEP::compute_large_box(
   const int N = type.size();
   const int grid_size = (N2 - N1 - 1) / BLOCK_SIZE + 1;
 
-  const double rc_cell_list = 0.5 * rc;
-
-  int num_bins[3];
-  box.get_num_bins(rc_cell_list, num_bins);
-
-  find_cell_list(
-    rc_cell_list,
-    num_bins,
-    box,
-    position_per_atom,
-    nep_data.cell_count,
-    nep_data.cell_count_sum,
-    nep_data.cell_contents);
+  neighbor.find_neighbor_global(
+    rc,
+    box, 
+    type, 
+    position_per_atom);
 
   find_neighbor_list_large_box<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     N,
     N1,
     N2,
-    num_bins[0],
-    num_bins[1],
-    num_bins[2],
     box,
     type.data(),
-    nep_data.cell_count.data(),
-    nep_data.cell_count_sum.data(),
-    nep_data.cell_contents.data(),
     position_per_atom.data(),
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
+    neighbor.NN.data(),
+    neighbor.NL.data(),
     nep_data.NN_radial.data(),
     nep_data.NL_radial.data(),
     nep_data.NN_angular.data(),
@@ -1067,14 +994,6 @@ void NEP::compute_large_box(
                 << std::endl;
     output_file.close();
   }
-
-  gpu_sort_neighbor_list<<<N, paramb.MN_radial, paramb.MN_radial * sizeof(int)>>>(
-    N, nep_data.NN_radial.data(), nep_data.NL_radial.data());
-  GPU_CHECK_KERNEL
-
-  gpu_sort_neighbor_list<<<N, paramb.MN_angular, paramb.MN_angular * sizeof(int)>>>(
-    N, nep_data.NN_angular.data(), nep_data.NL_angular.data());
-  GPU_CHECK_KERNEL
 
   bool is_polarizability = paramb.model_type == 2;
   find_descriptor<<<grid_size, BLOCK_SIZE>>>(
@@ -1346,13 +1265,13 @@ static bool get_expanded_box(const double rc, const Box& box, NEP::ExpandedBox& 
   ebox.num_cells[2] = box.pbc_z ? int(ceil(2.0 * rc / thickness_z)) : 1;
 
   bool is_small_box = false;
-  if (box.pbc_x && thickness_x <= 2.5 * rc) {
+  if (box.pbc_x && thickness_x <= 2.5 * (rc + 1.0)) {
     is_small_box = true;
   }
-  if (box.pbc_y && thickness_y <= 2.5 * rc) {
+  if (box.pbc_y && thickness_y <= 2.5 * (rc + 1.0)) {
     is_small_box = true;
   }
-  if (box.pbc_z && thickness_z <= 2.5 * rc) {
+  if (box.pbc_z && thickness_z <= 2.5 * (rc + 1.0)) {
     is_small_box = true;
   }
 
@@ -1463,11 +1382,10 @@ static __global__ void find_descriptor(
     // get radial descriptors
     for (int i1 = 0; i1 < g_NN[n1]; ++i1) {
       int n2 = g_NL[n1 + N * i1];
-      double x12double = g_x[n2] - x1;
-      double y12double = g_y[n2] - y1;
-      double z12double = g_z[n2] - z1;
-      apply_mic(box, x12double, y12double, z12double);
-      float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
+      apply_mic(box, x12, y12, z12);
       float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
       float fc12;
       int t2 = g_type[n2];
@@ -1492,11 +1410,10 @@ static __global__ void find_descriptor(
       float s[NUM_OF_ABC] = {0.0f};
       for (int i1 = 0; i1 < g_NN_angular[n1]; ++i1) {
         int n2 = g_NL_angular[n1 + N * i1];
-        double x12double = g_x[n2] - x1;
-        double y12double = g_y[n2] - y1;
-        double z12double = g_z[n2] - z1;
-        apply_mic(box, x12double, y12double, z12double);
-        float x12 = float(x12double), y12 = float(y12double), z12 = float(z12double);
+        float x12 = g_x[n2] - x1;
+        float y12 = g_y[n2] - y1;
+        float z12 = g_z[n2] - z1;
+        apply_mic(box, x12, y12, z12);
         float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
         float fc12;
         int t2 = g_type[n2];
@@ -1514,7 +1431,8 @@ static __global__ void find_descriptor(
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
       }
       find_q(
-        paramb.L_max, paramb.num_L, paramb.n_max_angular + 1, n, s, q + (paramb.n_max_radial + 1));
+        paramb.L_max, paramb.has_q_222, paramb.has_q_1111, paramb.has_q_112, paramb.has_q_123, paramb.has_q_233, paramb.has_q_134,
+        paramb.n_max_angular + 1, n, s, q + (paramb.n_max_radial + 1));
       for (int abc = 0; abc < (paramb.L_max + 1) * (paramb.L_max + 1) - 1; ++abc) {
         g_sum_fxyz[(n * ((paramb.L_max + 1) * (paramb.L_max + 1) - 1) + abc) * N + n1] = s[abc];
       }
@@ -1552,36 +1470,24 @@ void NEP::compute_large_box(
   const int N = type.size();
   const int grid_size = (N2 - N1 - 1) / BLOCK_SIZE + 1;
 
-  const double rc_cell_list = 0.5 * rc;
-
-  int num_bins[3];
-  box.get_num_bins(rc_cell_list, num_bins);
-
-  find_cell_list(
-    rc_cell_list,
-    num_bins,
-    box,
-    position_per_atom,
-    nep_data.cell_count,
-    nep_data.cell_count_sum,
-    nep_data.cell_contents);
+  neighbor.find_neighbor_global(
+    rc,
+    box, 
+    type, 
+    position_per_atom);
 
   find_neighbor_list_large_box<<<grid_size, BLOCK_SIZE>>>(
     paramb,
     N,
     N1,
     N2,
-    num_bins[0],
-    num_bins[1],
-    num_bins[2],
     box,
     type.data(),
-    nep_data.cell_count.data(),
-    nep_data.cell_count_sum.data(),
-    nep_data.cell_contents.data(),
     position_per_atom.data(),
     position_per_atom.data() + N,
     position_per_atom.data() + N * 2,
+    neighbor.NN.data(),
+    neighbor.NL.data(),
     nep_data.NN_radial.data(),
     nep_data.NL_radial.data(),
     nep_data.NN_angular.data(),
@@ -1609,14 +1515,6 @@ void NEP::compute_large_box(
                 << std::endl;
     output_file.close();
   }
-
-  gpu_sort_neighbor_list<<<N, paramb.MN_radial, paramb.MN_radial * sizeof(int)>>>(
-    N, nep_data.NN_radial.data(), nep_data.NL_radial.data());
-  GPU_CHECK_KERNEL
-
-  gpu_sort_neighbor_list<<<N, paramb.MN_angular, paramb.MN_angular * sizeof(int)>>>(
-    N, nep_data.NN_angular.data(), nep_data.NL_angular.data());
-  GPU_CHECK_KERNEL
 
   find_descriptor<<<grid_size, BLOCK_SIZE>>>(
     temperature,

@@ -15,7 +15,7 @@
 # some flags
 ###########################################################
 CC = nvcc
-CUDA_ARCH=-arch=sm_60
+CUDA_ARCH=-arch=sm_86
 ifdef OS # For Windows with the cl.exe compiler
 CFLAGS = -O3 $(CUDA_ARCH)
 else # For linux
@@ -81,7 +81,7 @@ HEADERS =                         \
 ###########################################################
 # executables
 ###########################################################
-all: gpumd nep gnep
+all: gnep 
 gpumd: $(OBJ_GPUMD)
 	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
 	@echo =================================================

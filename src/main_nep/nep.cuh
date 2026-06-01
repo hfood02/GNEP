@@ -21,16 +21,6 @@ class Parameters;
 class Dataset;
 
 struct NEP_Data {
-  GPU_Vector<int> NN_radial;  // radial neighbor number
-  GPU_Vector<int> NL_radial;  // radial neighbor list
-  GPU_Vector<int> NN_angular; // angular neighbor number
-  GPU_Vector<int> NL_angular; // angular neighbor list
-  GPU_Vector<float> x12_radial;
-  GPU_Vector<float> y12_radial;
-  GPU_Vector<float> z12_radial;
-  GPU_Vector<float> x12_angular;
-  GPU_Vector<float> y12_angular;
-  GPU_Vector<float> z12_angular;
   GPU_Vector<float> descriptors; // descriptors
   GPU_Vector<float> Fp;          // gradient of descriptors
   GPU_Vector<float> sum_fxyz;
@@ -51,6 +41,12 @@ public:
     int n_max_angular = 0; // n_angular = 0, 1, 2, ..., n_max_angular
     int L_max = 0;         // l = 1, 2, ..., L_max
     int dim_angular;
+    int has_q_222;
+    int has_q_1111;
+    int has_q_112;
+    int has_q_123;
+    int has_q_233;
+    int has_q_134;
     int num_L;
     int num_types = 0;
     int num_types_sq = 0;
@@ -61,12 +57,13 @@ public:
   struct ANN {
     int dim = 0;                    // dimension of the descriptor
     int num_neurons1 = 0;           // number of neurons in the hidden layer
+    int num_neurons2 = 0;           // number of neurons in the output layer
+    int num_hidden_layers = 0;      // number of hidden layers
+    int one_ann_no_bias = 0;        // number of parameters in the ANN without bias
     int num_para = 0;               // number of parameters
-    const float* w0[NUM_ELEMENTS]; // weight from the input layer to the hidden layer
-    const float* b0[NUM_ELEMENTS]; // bias for the hidden layer
-    const float* w1[NUM_ELEMENTS]; // weight from the hidden layer to the output layer
-    const float* b1;               // bias for the output layer
-    const float* c;                // for elements in descriptor
+    const float* wb[NUM_ELEMENTS];  // weigths and biases for the hidden layer
+    const float* b;                 // bias for the output layer
+    const float* c;                 // for elements in descriptor
   };
 
   struct ZBL {
@@ -91,7 +88,6 @@ public:
     const float* parameters,
     std::vector<Dataset>& dataset,
     bool calculate_q_scaler,
-    bool calculate_neighbor,
     int deviceCount);
 
 private:

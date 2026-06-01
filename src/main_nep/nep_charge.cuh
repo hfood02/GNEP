@@ -35,6 +35,12 @@ public:
     int n_max_angular = 0; // n_angular = 0, 1, 2, ..., n_max_angular
     int L_max = 0;         // l = 1, 2, ..., L_max
     int dim_angular;
+    int has_q_222;
+    int has_q_1111;
+    int has_q_112;
+    int has_q_123;
+    int has_q_233;
+    int has_q_134;
     int num_L;
     int num_types = 0;
     int num_types_sq = 0;
@@ -55,21 +61,8 @@ public:
   };
 
   struct NEP_Charge_Data {
-    GPU_Vector<int> NN_radial;  // radial neighbor number
-    GPU_Vector<int> NL_radial;  // radial neighbor list
-    GPU_Vector<int> NN_angular; // angular neighbor number
-    GPU_Vector<int> NL_angular; // angular neighbor list
-    GPU_Vector<float> x12_radial;
-    GPU_Vector<float> y12_radial;
-    GPU_Vector<float> z12_radial;
-    GPU_Vector<float> x12_angular;
-    GPU_Vector<float> y12_angular;
-    GPU_Vector<float> z12_angular;
     GPU_Vector<float> descriptors;       // descriptors
     GPU_Vector<float> charge_derivative; // derivative of charge with respect to descriptor
-    GPU_Vector<float> C6;                // C6
-    GPU_Vector<float> D_C6;              // related to dynamic C6
-    GPU_Vector<float> C6_derivative;     // dC6/dq
     GPU_Vector<float> Fp;                // derivative of energy with respect to descriptor
     GPU_Vector<float> sum_fxyz;
     GPU_Vector<float> parameters; // parameters to be optimized
@@ -115,7 +108,6 @@ public:
     const float* parameters,
     std::vector<Dataset>& dataset,
     bool calculate_q_scaler,
-    bool calculate_neighbor,
     int deviceCount);
   void find_k1k2k3();
 

@@ -18,6 +18,9 @@ The driver class calculating force and related quantities.
 #ifdef USE_TENSORFLOW
 #include "dp.cuh"
 #endif
+#ifdef USE_NNAP
+#include "nnap.cuh"
+#endif
 #include "adp.cuh"
 #include "eam.cuh"
 #include "eam_alloy.cuh"
@@ -98,7 +101,14 @@ void Force::parse_potential(
   } else if (strcmp(potential_name, "eam_dai_2006") == 0) {
     potential.reset(new EAM(fid_potential, potential_name, num_types, number_of_atoms));
   } else if (strcmp(potential_name, "eam/alloy") == 0) {
-    potential.reset(new EAMAlloy(param[1], number_of_atoms));
+    int max_neigh = 400;
+    if (num_param == 3) {
+      if (!is_valid_int(param[2], &max_neigh) || max_neigh <= 0 || max_neigh > 1024) {
+        PRINT_INPUT_ERROR(
+          "max_neighbor for eam/alloy must be a positive integer in (0, 1024].");
+      }
+    }
+    potential.reset(new EAMAlloy(param[1], number_of_atoms, max_neigh));
   } else if (strcmp(potential_name, "adp") == 0) {
     potential.reset(new ADP(param[1], number_of_atoms));
   } else if (strcmp(potential_name, "fcp") == 0) {
@@ -108,13 +118,9 @@ void Force::parse_potential(
     strcmp(potential_name, "nep4_charge1") == 0 ||
     strcmp(potential_name, "nep4_charge2") == 0 ||
     strcmp(potential_name, "nep4_charge3") == 0 ||
-    strcmp(potential_name, "nep4_charge4") == 0 ||
-    strcmp(potential_name, "nep4_charge5") == 0 ||
     strcmp(potential_name, "nep4_zbl_charge1") == 0 ||
     strcmp(potential_name, "nep4_zbl_charge2") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge3") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge4") == 0 ||
-    strcmp(potential_name, "nep4_zbl_charge5") == 0) {
+    strcmp(potential_name, "nep4_zbl_charge3") == 0) {
     potential.reset(new NEP_Charge(param[1], number_of_atoms));
     is_nep = true;
     check_types(param[1]);
@@ -163,6 +169,15 @@ void Force::parse_potential(
         "potential file name.\n");
     }
     potential.reset(new DP(param[2], number_of_atoms));
+#endif
+#ifdef USE_NNAP
+  } else if (strcmp(potential_name, "nnap") == 0) {
+    if (num_param != 3) {
+      PRINT_INPUT_ERROR(
+        "The potential command should contain two parameters, "
+        "the setting file and the NNAP driver file name.\n");
+    }
+    potential.reset(new NNAP(param[2], number_of_atoms));
 #endif
   } else if (strcmp(potential_name, "lj") == 0) {
     potential.reset(new LJ(fid_potential, num_types, number_of_atoms));
@@ -477,6 +492,8 @@ void Force::compute(
   GPU_Vector<double>& force_per_atom,
   GPU_Vector<double>& virial_per_atom)
 {
+  box.set_is_orthogonal();
+  
   const int number_of_atoms = type.size();
   if (!is_fcp) {
     gpu_apply_pbc<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
@@ -764,6 +781,8 @@ void Force::compute(
   GPU_Vector<double>& velocity_per_atom,
   GPU_Vector<double>& mass_per_atom)
 {
+  box.set_is_orthogonal();
+
   const int number_of_atoms = type.size();
   if (!is_fcp) {
     gpu_apply_pbc<<<(number_of_atoms - 1) / 128 + 1, 128>>>(

@@ -24,213 +24,101 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#define BLOCK_SIZE_FORCE 64
+#define BLOCK_SIZE_FORCE 256
 
-class CubicSpline
+// LAMMPS-style Hermite cubic spline using centered finite-difference derivatives.
+// Fills `out[m] = (a, b, c, d)` so that on interval m ∈ [0, n-2]:
+//   f(r) = a + b*dx + c*dx^2 + d*dx^3,  dx = r - m*h
+// For m = n-1 we store (y[n-1], y'(n-1)/h, 0, 0) — a linear extrapolation guard.
+static void compute_lammps_spline(float h, const std::vector<float>& y, std::vector<float4>& out)
 {
-private:
-  double x0;
-  double h;
-  int num_intervals;
-  std::vector<double> a, b, c, d;
+  const int n = static_cast<int>(y.size());
+  out.assign(n, make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+  if (n < 2)
+    return;
 
-  static bool thomas_algorithm(
-    const std::vector<double>& lower,
-    const std::vector<double>& main_diag,
-    const std::vector<double>& upper,
-    const std::vector<double>& rhs,
-    std::vector<double>& solution)
-  {
-    int n = main_diag.size();
-    if (n == 0 || lower.size() != n - 1 || upper.size() != n - 1 || rhs.size() != n) {
-      return false;
-    }
-
-    std::vector<double> new_main(n);
-    std::vector<double> new_rhs(n);
-    new_main[0] = main_diag[0];
-    new_rhs[0] = rhs[0];
-
-    if (new_main[0] == 0)
-      return false;
-
-    for (int i = 1; i < n; ++i) {
-      double factor = lower[i - 1] / new_main[i - 1];
-      new_main[i] = main_diag[i] - factor * upper[i - 1];
-      new_rhs[i] = rhs[i] - factor * new_rhs[i - 1];
-      if (new_main[i] == 0)
-        return false;
-    }
-
-    solution[n - 1] = new_rhs[n - 1] / new_main[n - 1];
-    for (int i = n - 2; i >= 0; --i) {
-      solution[i] = (new_rhs[i] - upper[i] * solution[i + 1]) / new_main[i];
-    }
-
-    return true;
+  // Derivative with respect to the normalized coordinate p = r/h (so dp per grid step = 1)
+  std::vector<float> fp(n, 0.0f);
+  fp[0] = y[1] - y[0];
+  fp[n - 1] = y[n - 1] - y[n - 2];
+  if (n >= 3) {
+    fp[1] = 0.5f * (y[2] - y[0]);
+    fp[n - 2] = 0.5f * (y[n - 1] - y[n - 3]);
+  }
+  for (int m = 2; m <= n - 3; ++m) {
+    fp[m] = ((y[m - 2] - y[m + 2]) + 8.0f * (y[m + 1] - y[m - 1])) / 12.0f;
   }
 
-public:
-  CubicSpline(double x_start, double step, const std::vector<double>& y)
-    : x0(x_start), h(step), num_intervals(y.size() - 1)
-  {
+  const float inv_h = 1.0f / h;
+  const float inv_h2 = inv_h * inv_h;
+  const float inv_h3 = inv_h2 * inv_h;
 
-    if (y.size() < 2) {
-      throw std::invalid_argument("At least two points required for spline.");
-    }
-    if (h <= 0) {
-      throw std::invalid_argument("Step size must be positive.");
-    }
-
-    int n = y.size();
-    a.resize(num_intervals);
-    b.resize(num_intervals);
-    c.resize(num_intervals);
-    d.resize(num_intervals);
-
-    if (n == 2) {
-      a[0] = y[0];
-      b[0] = (y[1] - y[0]) / h;
-      c[0] = 0.0;
-      d[0] = 0.0;
-      return;
-    }
-
-    std::vector<double> M(n, 0.0); // natural condition
-    int num_unknowns = n - 2;
-    std::vector<double> main_diag(num_unknowns, 4.0);
-    std::vector<double> lower_diag(num_unknowns - 1, 1.0);
-    std::vector<double> upper_diag(num_unknowns - 1, 1.0);
-    std::vector<double> rhs(num_unknowns);
-
-    for (int j = 0; j < num_unknowns; ++j) {
-      int i = j + 1;
-      rhs[j] = 6.0 * (y[i + 1] - 2 * y[i] + y[i - 1]) / (h * h);
-    }
-
-    std::vector<double> solution(num_unknowns);
-    if (!thomas_algorithm(lower_diag, main_diag, upper_diag, rhs, solution)) {
-      throw std::runtime_error("Failed to solve tridiagonal system.");
-    }
-
-    for (int j = 0; j < num_unknowns; ++j) {
-      M[j + 1] = solution[j];
-    }
-
-    for (int i = 0; i < num_intervals; ++i) {
-      double y_i = y[i];
-      double y_next = y[i + 1];
-      double M_i = M[i];
-      double M_next = M[i + 1];
-
-      a[i] = y_i;
-      c[i] = M_i / 2.0;
-      d[i] = (M_next - M_i) / (6.0 * h);
-      b[i] = (y_next - y_i) / h - h * (2 * M_i + M_next) / 6.0;
-    }
+  for (int m = 0; m <= n - 2; ++m) {
+    float dy = y[m + 1] - y[m];
+    float B2 = 3.0f * dy - 2.0f * fp[m] - fp[m + 1]; // p^2 coefficient
+    float B3 = fp[m] + fp[m + 1] - 2.0f * dy;        // p^3 coefficient
+    out[m].x = y[m];
+    out[m].y = fp[m] * inv_h;
+    out[m].z = B2 * inv_h2;
+    out[m].w = B3 * inv_h3;
   }
-
-  const std::vector<double>& get_a() const { return a; }
-  const std::vector<double>& get_b() const { return b; }
-  const std::vector<double>& get_c() const { return c; }
-  const std::vector<double>& get_d() const { return d; }
-};
-
-__device__ double get_rho_and_F(
-  double x,
-  double x0,
-  double h,
-  int type,
-  const double* a,
-  const double* b,
-  const double* c,
-  const double* d,
-  int num_intervals)
-{
-
-  int i = static_cast<int>((x - x0) / h);
-  if (i >= num_intervals)
-    i = num_intervals - 1;
-
-  double dx = x - (x0 + i * h);
-  int index = type * num_intervals + i;
-  return a[index] + b[index] * dx + c[index] * dx * dx + d[index] * dx * dx * dx;
+  out[n - 1].x = y[n - 1];
+  out[n - 1].y = fp[n - 1] * inv_h;
 }
 
-__device__ double get_rho_and_F_derivative(
-  double x,
-  double x0,
-  double h,
-  int type,
-  const double* b,
-  const double* c,
-  const double* d,
-  int num_intervals)
+// Spline coefficients are stored interleaved as float4 = (a, b, c, d) per (type, interval),
+// so a single 16-byte read fetches all four polynomial coefficients (vs. four scattered
+// 4-byte reads from separate arrays). Loaded via __ldg through the read-only cache.
+__device__ inline float
+spline_value(int i, float dx, int type, const float4* __restrict__ coef, int stride)
 {
-
-  int i = static_cast<int>((x - x0) / h);
-  if (i >= num_intervals)
-    i = num_intervals - 1;
-
-  double dx = x - (x0 + i * h);
-  int index = type * num_intervals + i;
-  return b[index] + 2 * c[index] * dx + 3 * d[index] * dx * dx;
+  float4 c = __ldg(&coef[type * stride + i]);
+  return c.x + (c.y + (c.z + c.w * dx) * dx) * dx;
 }
 
-__device__ double get_phi(
-  double x,
-  double x0,
-  double h,
+__device__ inline float
+spline_deriv(int i, float dx, int type, const float4* __restrict__ coef, int stride)
+{
+  float4 c = __ldg(&coef[type * stride + i]);
+  return c.y + (2.0f * c.z + 3.0f * c.w * dx) * dx;
+}
+
+__device__ inline float pair_value(
+  int i,
+  float dx,
   int i_type,
   int j_type,
   int Nelements,
-  const double* a,
-  const double* b,
-  const double* c,
-  const double* d,
-  int num_intervals)
+  const float4* __restrict__ coef,
+  int stride)
 {
-
-  int i = static_cast<int>((x - x0) / h);
-  if (i >= num_intervals)
-    i = num_intervals - 1;
-
-  double dx = x - (x0 + i * h);
-  int index = (i_type * Nelements + j_type) * num_intervals + i;
-  return a[index] + b[index] * dx + c[index] * dx * dx + d[index] * dx * dx * dx;
+  float4 c = __ldg(&coef[(i_type * Nelements + j_type) * stride + i]);
+  return c.x + (c.y + (c.z + c.w * dx) * dx) * dx;
 }
 
-__device__ double get_phi_derivative(
-  double x,
-  double x0,
-  double h,
+// Combined value + derivative lookup for phi spline: one cache miss instead of two.
+__device__ inline void pair_value_and_deriv(
+  int i,
+  float dx,
   int i_type,
   int j_type,
   int Nelements,
-  const double* b,
-  const double* c,
-  const double* d,
-  int num_intervals)
+  const float4* __restrict__ coef,
+  int stride,
+  float& val,
+  float& der)
 {
-
-  int i = static_cast<int>((x - x0) / h);
-  if (i >= num_intervals)
-    i = num_intervals - 1;
-
-  double dx = x - (x0 + i * h);
-  int index = (i_type * Nelements + j_type) * num_intervals + i;
-  return b[index] + 2 * c[index] * dx + 3 * d[index] * dx * dx;
+  float4 c = __ldg(&coef[(i_type * Nelements + j_type) * stride + i]);
+  val = c.x + (c.y + (c.z + c.w * dx) * dx) * dx;
+  der = c.y + (2.0f * c.z + 3.0f * c.w * dx) * dx;
 }
 
-EAMAlloy::EAMAlloy(const char* filename, const int number_of_atoms)
+EAMAlloy::EAMAlloy(const char* filename, const int number_of_atoms, const int max_neighbor)
 {
-
   initialize_eamalloy(filename, number_of_atoms);
-  eam_data.NN.resize(number_of_atoms);
-  eam_data.NL.resize(number_of_atoms * 400); // very safe for EAM
-  eam_data.cell_count.resize(number_of_atoms);
-  eam_data.cell_count_sum.resize(number_of_atoms);
-  eam_data.cell_contents.resize(number_of_atoms);
+
+  neighbor.initialize(eam_data.rc, number_of_atoms, 1);
+  neighbor.NL.resize(static_cast<size_t>(number_of_atoms) * max_neighbor);
   eam_data.d_F_rho_i_g.resize(number_of_atoms);
 }
 
@@ -274,172 +162,89 @@ void EAMAlloy::initialize_eamalloy(const char* filename, const int number_of_ato
   eam_data.dr = std::stod(data_words[index++]);
   eam_data.rc = std::stod(data_words[index++]);
 
-  eam_data.F_rho.resize(eam_data.Nelements * eam_data.nrho, 0.0);
-  eam_data.rho_r.resize(eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.phi_r.resize(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.F_rho_a.resize(eam_data.Nelements * eam_data.nrho, 0.0);
-  eam_data.F_rho_b.resize(eam_data.Nelements * eam_data.nrho, 0.0);
-  eam_data.F_rho_c.resize(eam_data.Nelements * eam_data.nrho, 0.0);
-  eam_data.F_rho_d.resize(eam_data.Nelements * eam_data.nrho, 0.0);
-  eam_data.rho_r_a.resize(eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.rho_r_b.resize(eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.rho_r_c.resize(eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.rho_r_d.resize(eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.phi_r_a.resize(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.phi_r_b.resize(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.phi_r_c.resize(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0);
-  eam_data.phi_r_d.resize(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0);
+  // Host-side raw tabulated values (used only during initialization).
+  std::vector<float> F_rho(eam_data.Nelements * eam_data.nrho, 0.0f);
+  std::vector<float> rho_r(eam_data.Nelements * eam_data.nr, 0.0f);
+  std::vector<float> phi_r(eam_data.Nelements * eam_data.Nelements * eam_data.nr, 0.0f);
 
+  // Section reader: reads n_values starting at the current line_idx, one line at a time.
+  // After reading the required count, any leftover tokens on the last line are discarded
+  // and line_idx advances to the next line. This matches LAMMPS's TextFileReader::next_dvector
+  // convention, where each section starts on a new line.
   int line_idx = 5;
-  for (int i = 0; i < eam_data.Nelements; ++i) {
-    // skip this line
-    line_idx++;
-
-    // read nrho + nr
-    int values_needed = eam_data.nrho + eam_data.nr;
-    int values_read = 0;
-
-    while (values_read < values_needed && line_idx < lines.size()) {
-      std::istringstream data_iss(lines[line_idx]);
-      std::string value_str;
-
-      while (data_iss >> value_str && values_read < values_needed) {
+  auto read_section = [&](float* dst, int n_values) {
+    int count = 0;
+    while (count < n_values && line_idx < static_cast<int>(lines.size())) {
+      std::istringstream iss(lines[line_idx]);
+      std::string tok;
+      while (iss >> tok && count < n_values) {
         try {
-          if (values_read < eam_data.nrho) {
-            eam_data.F_rho[i * eam_data.nrho + values_read] = std::stod(value_str);
-          } else {
-            eam_data.rho_r[i * eam_data.nr + (values_read - eam_data.nrho)] = std::stod(value_str);
-          }
-          values_read++;
+          dst[count] = std::stod(tok);
+          count++;
         } catch (const std::invalid_argument&) {
           break;
         }
       }
-
       line_idx++;
     }
+  };
+  for (int i = 0; i < eam_data.Nelements; ++i) {
+    line_idx++; // skip per-element info line
+    read_section(F_rho.data() + i * eam_data.nrho, eam_data.nrho);
+    read_section(rho_r.data() + i * eam_data.nr, eam_data.nr);
   }
 
-  // read phi_r
-  for (int i = 0; i < eam_data.Nelements && line_idx < lines.size(); ++i) {
-    for (int j = 0; j < eam_data.Nelements && line_idx < lines.size(); ++j) {
-      if (i >= j) {
-        int phi_needed = eam_data.nr;
-        int phi_for_pair = 0;
-
-        while (phi_for_pair < phi_needed && line_idx < lines.size()) {
-          std::istringstream phi_iss(lines[line_idx]);
-          std::string value_str;
-
-          while (phi_iss >> value_str && phi_for_pair < phi_needed) {
-            try {
-              size_t idx = (i * eam_data.Nelements + j) * eam_data.nr + phi_for_pair;
-              eam_data.phi_r[idx] = std::stod(value_str);
-              phi_for_pair++;
-            } catch (const std::invalid_argument&) {
-              break;
-            }
-          }
-
-          line_idx++;
-        }
-
-        // fill it
-        if (i != j) {
-          for (int k = 0; k < eam_data.nr; ++k) {
-            size_t idx_ij = (i * eam_data.Nelements + j) * eam_data.nr + k;
-            size_t idx_ji = (j * eam_data.Nelements + i) * eam_data.nr + k;
-            eam_data.phi_r[idx_ji] = eam_data.phi_r[idx_ij];
-          }
+  // phi_r is stored as r*phi(r) (LAMMPS z2r convention); each pair block starts on a new line.
+  // Lower-triangular (i >= j) blocks are read from the file and mirrored.
+  for (int i = 0; i < eam_data.Nelements; ++i) {
+    for (int j = 0; j <= i; ++j) {
+      read_section(phi_r.data() + (i * eam_data.Nelements + j) * eam_data.nr, eam_data.nr);
+      if (i != j) {
+        for (int k = 0; k < eam_data.nr; ++k) {
+          size_t idx_ij = (i * eam_data.Nelements + j) * eam_data.nr + k;
+          size_t idx_ji = (j * eam_data.Nelements + i) * eam_data.nr + k;
+          phi_r[idx_ji] = phi_r[idx_ij];
         }
       }
     }
   }
 
-  // r*phi -> phi
-  for (int i = 0; i < eam_data.Nelements; ++i) {
-    for (int j = 0; j < eam_data.Nelements; ++j) {
-      for (int k = 1; k < eam_data.nr; ++k) {
-        size_t idx = (i * eam_data.Nelements + j) * eam_data.nr + k;
-        eam_data.phi_r[idx] /= k * eam_data.dr;
-      }
-      size_t idx0 = (i * eam_data.Nelements + j) * eam_data.nr;
-      size_t idx1 = (i * eam_data.Nelements + j) * eam_data.nr + 1;
-      eam_data.phi_r[idx0] = eam_data.phi_r[idx1];
-    }
-  }
+  // Build packed (a,b,c,d) coefficient tables and upload to GPU.
+  std::vector<float4> F_rho_packed(eam_data.Nelements * eam_data.nrho);
+  std::vector<float4> rho_r_packed(eam_data.Nelements * eam_data.nr);
+  std::vector<float4> phi_r_packed(eam_data.Nelements * eam_data.Nelements * eam_data.nr);
 
-  // cubic spline
   for (int i = 0; i < eam_data.Nelements; ++i) {
-    std::vector<double> y_sub(
-      eam_data.F_rho.begin() + i * eam_data.nrho,
-      eam_data.F_rho.begin() + i * eam_data.nrho + eam_data.nrho);
-    auto sp = CubicSpline(0.0, eam_data.drho, y_sub);
-    for (int j = 0; j < eam_data.nrho; ++j) {
-      size_t idx = i * eam_data.nrho + j;
-      eam_data.F_rho_a[idx] = sp.get_a()[j];
-      eam_data.F_rho_b[idx] = sp.get_b()[j];
-      eam_data.F_rho_c[idx] = sp.get_c()[j];
-      eam_data.F_rho_d[idx] = sp.get_d()[j];
-    }
+    std::vector<float> y(
+      F_rho.begin() + i * eam_data.nrho, F_rho.begin() + (i + 1) * eam_data.nrho);
+    std::vector<float4> coef;
+    compute_lammps_spline(eam_data.drho, y, coef);
+    std::copy(coef.begin(), coef.end(), F_rho_packed.begin() + i * eam_data.nrho);
   }
 
   for (int i = 0; i < eam_data.Nelements; ++i) {
-    std::vector<double> y_sub(
-      eam_data.rho_r.begin() + i * eam_data.nr,
-      eam_data.rho_r.begin() + i * eam_data.nr + eam_data.nr);
-    auto sp = CubicSpline(0.0, eam_data.dr, y_sub);
-    for (int j = 0; j < eam_data.nr; ++j) {
-      size_t idx = i * eam_data.nr + j;
-      eam_data.rho_r_a[idx] = sp.get_a()[j];
-      eam_data.rho_r_b[idx] = sp.get_b()[j];
-      eam_data.rho_r_c[idx] = sp.get_c()[j];
-      eam_data.rho_r_d[idx] = sp.get_d()[j];
-    }
+    std::vector<float> y(rho_r.begin() + i * eam_data.nr, rho_r.begin() + (i + 1) * eam_data.nr);
+    std::vector<float4> coef;
+    compute_lammps_spline(eam_data.dr, y, coef);
+    std::copy(coef.begin(), coef.end(), rho_r_packed.begin() + i * eam_data.nr);
   }
 
   for (int i = 0; i < eam_data.Nelements; ++i) {
     for (int j = 0; j < eam_data.Nelements; ++j) {
-      std::vector<double> y_sub(
-        eam_data.phi_r.begin() + (i * eam_data.Nelements + j) * eam_data.nr,
-        eam_data.phi_r.begin() + (i * eam_data.Nelements + j) * eam_data.nr + eam_data.nr);
-      auto sp = CubicSpline(0.0, eam_data.dr, y_sub);
-      for (int k = 0; k < eam_data.nr; ++k) {
-        size_t idx = (i * eam_data.Nelements + j) * eam_data.nr + k;
-        eam_data.phi_r_a[idx] = sp.get_a()[k];
-        eam_data.phi_r_b[idx] = sp.get_b()[k];
-        eam_data.phi_r_c[idx] = sp.get_c()[k];
-        eam_data.phi_r_d[idx] = sp.get_d()[k];
-      }
+      const size_t base = (i * eam_data.Nelements + j) * eam_data.nr;
+      std::vector<float> y(phi_r.begin() + base, phi_r.begin() + base + eam_data.nr);
+      std::vector<float4> coef;
+      compute_lammps_spline(eam_data.dr, y, coef);
+      std::copy(coef.begin(), coef.end(), phi_r_packed.begin() + base);
     }
   }
 
-  // GPU memory copy
-  eam_data.F_rho_a_g.resize(eam_data.F_rho_a.size());
-  eam_data.F_rho_b_g.resize(eam_data.F_rho_b.size());
-  eam_data.F_rho_c_g.resize(eam_data.F_rho_c.size());
-  eam_data.F_rho_d_g.resize(eam_data.F_rho_d.size());
-  eam_data.rho_r_a_g.resize(eam_data.rho_r_a.size());
-  eam_data.rho_r_b_g.resize(eam_data.rho_r_b.size());
-  eam_data.rho_r_c_g.resize(eam_data.rho_r_c.size());
-  eam_data.rho_r_d_g.resize(eam_data.rho_r_d.size());
-  eam_data.phi_r_a_g.resize(eam_data.phi_r_a.size());
-  eam_data.phi_r_b_g.resize(eam_data.phi_r_b.size());
-  eam_data.phi_r_c_g.resize(eam_data.phi_r_c.size());
-  eam_data.phi_r_d_g.resize(eam_data.phi_r_d.size());
-
-  eam_data.F_rho_a_g.copy_from_host(eam_data.F_rho_a.data(), eam_data.F_rho_a.size());
-  eam_data.F_rho_b_g.copy_from_host(eam_data.F_rho_b.data(), eam_data.F_rho_b.size());
-  eam_data.F_rho_c_g.copy_from_host(eam_data.F_rho_c.data(), eam_data.F_rho_c.size());
-  eam_data.F_rho_d_g.copy_from_host(eam_data.F_rho_d.data(), eam_data.F_rho_d.size());
-  eam_data.rho_r_a_g.copy_from_host(eam_data.rho_r_a.data(), eam_data.rho_r_a.size());
-  eam_data.rho_r_b_g.copy_from_host(eam_data.rho_r_b.data(), eam_data.rho_r_b.size());
-  eam_data.rho_r_c_g.copy_from_host(eam_data.rho_r_c.data(), eam_data.rho_r_c.size());
-  eam_data.rho_r_d_g.copy_from_host(eam_data.rho_r_d.data(), eam_data.rho_r_d.size());
-  eam_data.phi_r_a_g.copy_from_host(eam_data.phi_r_a.data(), eam_data.phi_r_a.size());
-  eam_data.phi_r_b_g.copy_from_host(eam_data.phi_r_b.data(), eam_data.phi_r_b.size());
-  eam_data.phi_r_c_g.copy_from_host(eam_data.phi_r_c.data(), eam_data.phi_r_c.size());
-  eam_data.phi_r_d_g.copy_from_host(eam_data.phi_r_d.data(), eam_data.phi_r_d.size());
+  eam_data.F_rho_g.resize(F_rho_packed.size());
+  eam_data.rho_r_g.resize(rho_r_packed.size());
+  eam_data.phi_r_g.resize(phi_r_packed.size());
+  eam_data.F_rho_g.copy_from_host(F_rho_packed.data(), F_rho_packed.size());
+  eam_data.rho_r_g.copy_from_host(rho_r_packed.data(), rho_r_packed.size());
+  eam_data.phi_r_g.copy_from_host(phi_r_packed.data(), phi_r_packed.size());
 }
 
 EAMAlloy::~EAMAlloy(void)
@@ -452,60 +257,80 @@ static __global__ void find_force_eam_step1(
   const int N1,
   const int N2,
   const Box box,
-  const int* g_NN,
-  const int* g_NL,
-  const int* g_type,
+  const int* __restrict__ g_NN_global,
+  const int* __restrict__ g_NL_global,
+  const int* __restrict__ g_type,
   const int nr,
   const int nrho,
   const int Nelements,
-  const double rc,
-  const double dr,
-  const double drho,
-  const double* F_rho_a,
-  const double* F_rho_b,
-  const double* F_rho_c,
-  const double* F_rho_d,
-  const double* rho_r_a,
-  const double* rho_r_b,
-  const double* rho_r_c,
-  const double* rho_r_d,
-  const double* phi_r_a,
-  const double* phi_r_b,
-  const double* phi_r_c,
-  const double* phi_r_d,
-  double* d_F_rho_i,
+  const float rc,
+  const float dr,
+  const float dr_inv,
+  const float drho,
+  const float drho_inv,
+  const float4* __restrict__ F_rho_coef,
+  const float4* __restrict__ rho_r_coef,
+  const float4* __restrict__ phi_r_coef,
+  float* d_F_rho_i,
   const double* __restrict__ g_x,
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
   double* g_pe)
 {
-  int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1; // particle index
+  int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
 
   if (n1 < N2) {
-    int NN = g_NN[n1];
+    int NN = g_NN_global[n1];
     double x1 = g_x[n1];
     double y1 = g_y[n1];
     double z1 = g_z[n1];
     const int i_type = g_type[n1];
-    double rho = 0.0;
+    float rho = 0.0f;
+    float pe_local = 0.0f;
+
     for (int i1 = 0; i1 < NN; ++i1) {
-      int n2 = g_NL[n1 + N * i1];
-      double x12 = g_x[n2] - x1;
-      double y12 = g_y[n2] - y1;
-      double z12 = g_z[n2] - z1;
+      int n2 = g_NL_global[n1 + N * i1];
+      float x12 = g_x[n2] - x1;
+      float y12 = g_y[n2] - y1;
+      float z12 = g_z[n2] - z1;
       apply_mic(box, x12, y12, z12);
-      double d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
+      float d12 = sqrt(x12 * x12 + y12 * y12 + z12 * z12);
       if (d12 <= rc) {
         const int j_type = g_type[n2];
-        g_pe[n1] +=
-          get_phi(d12, 0.0, dr, i_type, j_type, Nelements, phi_r_a, phi_r_b, phi_r_c, phi_r_d, nr) *
-          0.5;
-        rho += get_rho_and_F(d12, 0.0, dr, j_type, rho_r_a, rho_r_b, rho_r_c, rho_r_d, nr);
+
+        int ii = static_cast<int>(d12 * dr_inv);
+        if (ii > nr - 2)
+          ii = nr - 2;
+        float dx = d12 - ii * dr;
+
+        float z2 = pair_value(ii, dx, i_type, j_type, Nelements, phi_r_coef, nr);
+        pe_local += (z2 / d12) * 0.5f;
+        rho += spline_value(ii, dx, j_type, rho_r_coef, nr);
       }
     }
-    g_pe[n1] += get_rho_and_F(rho, 0.0, drho, i_type, F_rho_a, F_rho_b, F_rho_c, F_rho_d, nrho);
-    d_F_rho_i[n1] =
-      get_rho_and_F_derivative(rho, 0.0, drho, i_type, F_rho_b, F_rho_c, F_rho_d, nrho);
+
+    // F(rho) lookup with LAMMPS-style p-clamping and linear extrapolation for rho > rhomax.
+    // The cubic on each interval is only valid for dx ∈ [0, drho]; clamping prevents the
+    // polynomial from blowing up when atoms get very close and rho exceeds the table.
+    const float rhomax = (nrho - 1) * drho;
+    int jj = static_cast<int>(rho * drho_inv);
+    if (jj > nrho - 2)
+      jj = nrho - 2;
+    if (jj < 0)
+      jj = 0;
+    float dx_F = rho - jj * drho;
+    if (dx_F > drho)
+      dx_F = drho;
+    if (dx_F < 0.0f)
+      dx_F = 0.0f;
+    float4 Fc = __ldg(&F_rho_coef[i_type * nrho + jj]);
+    float F_val = Fc.x + (Fc.y + (Fc.z + Fc.w * dx_F) * dx_F) * dx_F;
+    float fp_local = Fc.y + (2.0f * Fc.z + 3.0f * Fc.w * dx_F) * dx_F;
+    if (rho > rhomax) {
+      F_val += fp_local * (rho - rhomax);
+    }
+    g_pe[n1] += pe_local + F_val;
+    d_F_rho_i[n1] = fp_local;
   }
 }
 
@@ -514,38 +339,26 @@ static __global__ void find_force_eam_step2(
   const int N1,
   const int N2,
   const Box box,
-  const int* g_NN,
-  const int* g_NL,
-  const int* g_type,
+  const int* __restrict__ g_NN,
+  const int* __restrict__ g_NL,
+  const int* __restrict__ g_type,
   const int nr,
-  const int nrho,
   const int Nelements,
-  const double rc,
-  const double dr,
-  const double drho,
-  const double* F_rho_a,
-  const double* F_rho_b,
-  const double* F_rho_c,
-  const double* F_rho_d,
-  const double* rho_r_a,
-  const double* rho_r_b,
-  const double* rho_r_c,
-  const double* rho_r_d,
-  const double* phi_r_a,
-  const double* phi_r_b,
-  const double* phi_r_c,
-  const double* phi_r_d,
-  double* d_F_rho_i,
+  const float rc,
+  const float dr,
+  const float dr_inv,
+  const float4* __restrict__ rho_r_coef,
+  const float4* __restrict__ phi_r_coef,
+  const float* __restrict__ d_F_rho_i,
   const double* __restrict__ g_x,
   const double* __restrict__ g_y,
   const double* __restrict__ g_z,
   double* g_fx,
   double* g_fy,
   double* g_fz,
-  double* g_virial,
-  double* g_pe)
+  double* g_virial)
 {
-  int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1; // particle index
+  int n1 = blockIdx.x * blockDim.x + threadIdx.x + N1;
 
   if (n1 < N2) {
     int NN = g_NN[n1];
@@ -553,54 +366,67 @@ static __global__ void find_force_eam_step2(
     double y1 = g_y[n1];
     double z1 = g_z[n1];
     const int i_type = g_type[n1];
-    double Fp1 = d_F_rho_i[n1];
+    float Fp1 = __ldg(&d_F_rho_i[n1]);
+
+    float fx_sum = 0.0f, fy_sum = 0.0f, fz_sum = 0.0f;
+    float vxx = 0.0f, vyy = 0.0f, vzz = 0.0f;
+    float vxy = 0.0f, vxz = 0.0f, vyz = 0.0f;
+
     for (int i1 = 0; i1 < NN; ++i1) {
       int n2 = g_NL[n1 + N * i1];
-      double xij = g_x[n2] - x1;
-      double yij = g_y[n2] - y1;
-      double zij = g_z[n2] - z1;
+      float xij = g_x[n2] - x1;
+      float yij = g_y[n2] - y1;
+      float zij = g_z[n2] - z1;
       apply_mic(box, xij, yij, zij);
-      double r = sqrt(xij * xij + yij * yij + zij * zij);
+      float r = sqrt(xij * xij + yij * yij + zij * zij);
       if (r <= rc) {
-        const int j_type = g_type[n2];
-        double Fp2 = d_F_rho_i[n2];
-        double d_phi_r_i =
-          get_phi_derivative(r, 0.0, dr, i_type, j_type, Nelements, phi_r_b, phi_r_c, phi_r_d, nr);
-        double d_F_i =
-          get_rho_and_F_derivative(r, 0.0, dr, j_type, rho_r_b, rho_r_c, rho_r_d, nr) * Fp1;
-        double d_F_j =
-          get_rho_and_F_derivative(r, 0.0, dr, i_type, rho_r_b, rho_r_c, rho_r_d, nr) * Fp2;
+        const int j_type = __ldg(&g_type[n2]);
+        float Fp2 = __ldg(&d_F_rho_i[n2]);
 
-        double fij = d_phi_r_i + d_F_i + d_F_j;
-        double fx = fij * xij / r;
-        double fy = fij * yij / r;
-        double fz = fij * zij / r;
+        int ii = static_cast<int>(r * dr_inv);
+        if (ii > nr - 2)
+          ii = nr - 2;
+        float dx = r - ii * dr;
 
-        // save force
-        g_fx[n1] += fx;
-        g_fy[n1] += fy;
-        g_fz[n1] += fz;
-        double sxx = fx * xij * 0.5;
-        double syy = fy * yij * 0.5;
-        double szz = fz * zij * 0.5;
-        double sxy = fx * yij * 0.5;
-        double sxz = fx * zij * 0.5;
-        double syz = fy * zij * 0.5;
-        // save virial
-        // xx xy xz    0 3 4
-        // yx yy yz    6 1 5
-        // zx zy zz    7 8 2
-        g_virial[n1 + 0 * N] -= sxx;
-        g_virial[n1 + 1 * N] -= syy;
-        g_virial[n1 + 2 * N] -= szz;
-        g_virial[n1 + 3 * N] -= sxy;
-        g_virial[n1 + 4 * N] -= sxz;
-        g_virial[n1 + 5 * N] -= syz;
-        g_virial[n1 + 6 * N] -= sxy;
-        g_virial[n1 + 7 * N] -= sxz;
-        g_virial[n1 + 8 * N] -= syz;
+        float rinv = 1.0f / r;
+        float z2, dz2_dr;
+        pair_value_and_deriv(ii, dx, i_type, j_type, Nelements, phi_r_coef, nr, z2, dz2_dr);
+        float phi_ij = z2 * rinv;
+        float d_phi_r_i = (dz2_dr - phi_ij) * rinv;
+
+        float d_F_i = spline_deriv(ii, dx, j_type, rho_r_coef, nr) * Fp1;
+        float d_F_j = spline_deriv(ii, dx, i_type, rho_r_coef, nr) * Fp2;
+
+        float fij = d_phi_r_i + d_F_i + d_F_j;
+        float fx = fij * xij * rinv;
+        float fy = fij * yij * rinv;
+        float fz = fij * zij * rinv;
+
+        fx_sum += fx;
+        fy_sum += fy;
+        fz_sum += fz;
+
+        vxx -= fx * xij * 0.5f;
+        vyy -= fy * yij * 0.5f;
+        vzz -= fz * zij * 0.5f;
+        vxy -= fx * yij * 0.5f;
+        vxz -= fx * zij * 0.5f;
+        vyz -= fy * zij * 0.5f;
       }
     }
+
+    g_fx[n1] += fx_sum;
+    g_fy[n1] += fy_sum;
+    g_fz[n1] += fz_sum;
+    g_virial[n1 + 0 * N] += vxx;
+    g_virial[n1 + 1 * N] += vyy;
+    g_virial[n1 + 2 * N] += vzz;
+    g_virial[n1 + 3 * N] += vxy;
+    g_virial[n1 + 4 * N] += vxz;
+    g_virial[n1 + 5 * N] += vyz;
+    g_virial[n1 + 6 * N] += vxy;
+    g_virial[n1 + 7 * N] += vxz;
+    g_virial[n1 + 8 * N] += vyz;
   }
 }
 
@@ -617,46 +443,32 @@ void EAMAlloy::compute(
 
   int grid_size = (N2 - N1 - 1) / BLOCK_SIZE_FORCE + 1;
 
-  find_neighbor(
-    N1,
-    N2,
-    eam_data.rc,
-    box,
-    type,
-    position_per_atom,
-    eam_data.cell_count,
-    eam_data.cell_count_sum,
-    eam_data.cell_contents,
-    eam_data.NN,
-    eam_data.NL);
+  neighbor.find_neighbor_global(eam_data.rc, box, type, position_per_atom);
 
-  eam_data.d_F_rho_i_g.fill(0.0);
+  const float4* F_rho_coef = eam_data.F_rho_g.data();
+  const float4* rho_r_coef = eam_data.rho_r_g.data();
+  const float4* phi_r_coef = eam_data.phi_r_g.data();
+
+  eam_data.d_F_rho_i_g.fill(0.0f);
   find_force_eam_step1<<<grid_size, BLOCK_SIZE_FORCE>>>(
     number_of_atoms,
     N1,
     N2,
     box,
-    eam_data.NN.data(),
-    eam_data.NL.data(),
+    neighbor.NN.data(),
+    neighbor.NL.data(),
     type.data(),
     eam_data.nr,
     eam_data.nrho,
     eam_data.Nelements,
     eam_data.rc,
     eam_data.dr,
+    1.0f / eam_data.dr,
     eam_data.drho,
-    eam_data.F_rho_a_g.data(),
-    eam_data.F_rho_b_g.data(),
-    eam_data.F_rho_c_g.data(),
-    eam_data.F_rho_d_g.data(),
-    eam_data.rho_r_a_g.data(),
-    eam_data.rho_r_b_g.data(),
-    eam_data.rho_r_c_g.data(),
-    eam_data.rho_r_d_g.data(),
-    eam_data.phi_r_a_g.data(),
-    eam_data.phi_r_b_g.data(),
-    eam_data.phi_r_c_g.data(),
-    eam_data.phi_r_d_g.data(),
+    1.0f / eam_data.drho,
+    F_rho_coef,
+    rho_r_coef,
+    phi_r_coef,
     eam_data.d_F_rho_i_g.data(),
     position_per_atom.data(),
     position_per_atom.data() + number_of_atoms,
@@ -669,27 +481,16 @@ void EAMAlloy::compute(
     N1,
     N2,
     box,
-    eam_data.NN.data(),
-    eam_data.NL.data(),
+    neighbor.NN.data(),
+    neighbor.NL.data(),
     type.data(),
     eam_data.nr,
-    eam_data.nrho,
     eam_data.Nelements,
     eam_data.rc,
     eam_data.dr,
-    eam_data.drho,
-    eam_data.F_rho_a_g.data(),
-    eam_data.F_rho_b_g.data(),
-    eam_data.F_rho_c_g.data(),
-    eam_data.F_rho_d_g.data(),
-    eam_data.rho_r_a_g.data(),
-    eam_data.rho_r_b_g.data(),
-    eam_data.rho_r_c_g.data(),
-    eam_data.rho_r_d_g.data(),
-    eam_data.phi_r_a_g.data(),
-    eam_data.phi_r_b_g.data(),
-    eam_data.phi_r_c_g.data(),
-    eam_data.phi_r_d_g.data(),
+    1.0f / eam_data.dr,
+    rho_r_coef,
+    phi_r_coef,
     eam_data.d_F_rho_i_g.data(),
     position_per_atom.data(),
     position_per_atom.data() + number_of_atoms,
@@ -697,7 +498,6 @@ void EAMAlloy::compute(
     force_per_atom.data(),
     force_per_atom.data() + number_of_atoms,
     force_per_atom.data() + 2 * number_of_atoms,
-    virial_per_atom.data(),
-    potential_per_atom.data());
+    virial_per_atom.data());
   GPU_CHECK_KERNEL
 }

@@ -86,6 +86,12 @@ public:
     int n_max_radial = 0;  // n_radial = 0, 1, 2, ..., n_max_radial
     int n_max_angular = 0; // n_angular = 0, 1, 2, ..., n_max_angular
     int L_max = 0;         // l = 0, 1, 2, ..., L_max
+    int has_q_222 = 0;
+    int has_q_1111 = 0;
+    int has_q_112 = 0;
+    int has_q_123 = 0;
+    int has_q_233 = 0;
+    int has_q_134 = 0;
     int dim_angular;
     int num_L;
     int basis_size_radial = 8;  // for nep3
