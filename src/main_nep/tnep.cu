@@ -69,8 +69,8 @@ static __global__ void find_descriptors_radial(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (n * (paramb.basis_size_radial + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c[c_index];
         }
         q[n] += gn12;
@@ -120,8 +120,13 @@ static __global__ void find_descriptors_angular(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = (n * (paramb.basis_size_angular + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2 + paramb.num_c_radial;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c[c_index];
         }
         accumulate_s(paramb.L_max, d12, x12, y12, z12, gn12, s);
@@ -144,8 +149,6 @@ static __global__ void find_descriptors_angular(
 TNEP::TNEP(
   Parameters& para,
   int N,
-  int N_times_max_NN_radial,
-  int N_times_max_NN_angular,
   int version,
   int deviceCount)
 {
@@ -234,7 +237,7 @@ void TNEP::update_potential(Parameters& para, float* parameters, ANN& ann)
   ann.c = pointer;
 }
 
-static void __global__ find_max_min(const int N, const float* g_q, float* g_q_scaler)
+static void __global__ find_max_min(const int N, const float* g_q, float* g_q_scaler, float* g_q_scaler_max, float* g_q_scaler_min)
 {
   const int tid = threadIdx.x;
   const int bid = blockIdx.x;
@@ -270,7 +273,9 @@ static void __global__ find_max_min(const int N, const float* g_q, float* g_q_sc
     __syncthreads();
   }
   if (tid == 0) {
-    g_q_scaler[bid] = min(g_q_scaler[bid], 1.0f / (s_max[0] - s_min[0]));
+    g_q_scaler_max[bid] = max(g_q_scaler_max[bid], s_max[0]);
+    g_q_scaler_min[bid] = min(g_q_scaler_min[bid], s_min[0]);
+    g_q_scaler[bid] = 1.0f / (g_q_scaler_max[bid] - g_q_scaler_min[bid]);
   }
 }
 
@@ -285,8 +290,9 @@ static __global__ void apply_ann(
   float* g_Fp)
 {
   int n1 = threadIdx.x + blockIdx.x * blockDim.x;
-  int type = g_type[n1];
   if (n1 < N) {
+    int type = g_type[n1];
+
     // get descriptors
     float q[MAX_DIM] = {0.0f};
     for (int d = 0; d < annmb.dim; ++d) {
@@ -343,8 +349,9 @@ static __global__ void apply_ann_pol(
   float* g_Fp)
 {
   int n1 = threadIdx.x + blockIdx.x * blockDim.x;
-  int type = g_type[n1];
   if (n1 < N) {
+    int type = g_type[n1];
+
     // get descriptors
     float q[MAX_DIM] = {0.0f};
     for (int d = 0; d < annmb.dim; ++d) {
@@ -485,8 +492,8 @@ static __global__ void find_force_radial(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gnp12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (n * (paramb.basis_size_radial + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gnp12 += fnp12[k] * annmb.c[c_index];
         }
         float tmp12 = g_Fp[n1 + n * N] * gnp12 * d12inv;
@@ -583,8 +590,13 @@ static __global__ void find_force_angular(
         float gn12 = 0.0f;
         float gnp12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = (n * (paramb.basis_size_angular + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2 + paramb.num_c_radial;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c[c_index];
           gnp12 += fnp12[k] * annmb.c[c_index];
         }
@@ -675,7 +687,9 @@ void TNEP::find_force(
       find_max_min<<<annmb[device_id].dim, 1024>>>(
         dataset[device_id].N,
         nep_data[device_id].descriptors.data(),
-        para.q_scaler_gpu[device_id].data());
+        para.q_scaler_gpu[device_id].data(),
+        para.q_scaler_max[device_id].data(),
+        para.q_scaler_min[device_id].data());
       GPU_CHECK_KERNEL
     }
 

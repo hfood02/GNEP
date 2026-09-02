@@ -14,13 +14,13 @@
 */
 
 #pragma once
-#include "property.cuh"
+#include "action.cuh"
 #include "utilities/gpu_vector.cuh"
 #include <vector>
 class Group;
 class Atom;
 
-class MSD : public Property
+class MSD : public Action
 {
 public:
   bool compute_ = false;
@@ -30,7 +30,7 @@ public:
   int group_id_ = -1;
   bool msd_over_all_groups_ = false;
 
-  virtual void preprocess(
+  virtual void pre_run(
     const int number_of_steps,
     const double time_step,
     Integrate& integrate,
@@ -39,7 +39,7 @@ public:
     Box& box,
     Force& force);
 
-  virtual void process(
+  virtual void end_of_step(
       const int number_of_steps,
       int step,
       const int fixed_group,
@@ -53,7 +53,7 @@ public:
       Atom& atom,
       Force& force);
 
-  virtual void postprocess(
+  virtual void post_run(
     Atom& atom,
     Box& box,
     Integrate& integrate,
@@ -79,4 +79,5 @@ private:
   GPU_Vector<double> msdx_, msdy_, msdz_;
   GPU_Vector<double> msdx_out_, msdy_out_, msdz_out_;  // holds output for writing
   GPU_Vector<int> group_per_atom_gpu_;
+  double cpu_h_[9];
 };

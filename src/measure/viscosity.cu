@@ -26,7 +26,7 @@ Calculate the stress autocorrelation function and viscosity.
 
 #define NUM_OF_COMPONENTS 9
 
-void Viscosity::preprocess(
+void Viscosity::pre_run(
   const int number_of_steps,
   const double time_step,
   Integrate& integrate,
@@ -83,7 +83,7 @@ static __global__ void gpu_sum_stress(
   }
 }
 
-void Viscosity::process(
+void Viscosity::end_of_step(
   const int number_of_steps,
   int step,
   const int fixed_group,
@@ -195,7 +195,7 @@ find_viscosity(const int Nc, const double factor, const double* correlation, dou
   }
 }
 
-void Viscosity::postprocess(
+void Viscosity::post_run(
   Atom& atom,
   Box& box,
   Integrate& integrate,
@@ -229,6 +229,20 @@ void Viscosity::postprocess(
   find_viscosity(Nc, factor, correlation_cpu.data(), viscosity.data());
 
   FILE* fid = fopen("viscosity.out", "a");
+  fprintf(fid, "# compute_viscosity %d %d\n", sample_interval, Nc);
+  fprintf(fid, "# format_version 1\n");
+  fprintf(fid, "# num_atoms %d\n", atom.number_of_atoms);
+  fprintf(fid,
+    "# cell %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n",
+    box.cpu_h[0], box.cpu_h[3], box.cpu_h[6],
+    box.cpu_h[1], box.cpu_h[4], box.cpu_h[7],
+    box.cpu_h[2], box.cpu_h[5], box.cpu_h[8]);
+  fprintf(fid, "# dt_output %.10e ps\n", dt_in_ps);
+  fprintf(
+    fid,
+    "# columns time_ps"
+    " sacf_xx sacf_yy sacf_zz sacf_xy sacf_xz sacf_yz sacf_yx sacf_zx sacf_zy"
+    " visc_xx visc_yy visc_zz visc_xy visc_xz visc_yz visc_yx visc_zx visc_zy\n");
   for (int nc = 0; nc < Nc; nc++) {
     fprintf(fid, "%25.15e", nc * dt_in_ps);
     for (int m = 0; m < NUM_OF_COMPONENTS; m++) {
@@ -251,7 +265,7 @@ void Viscosity::postprocess(
 Viscosity::Viscosity(const char** param, int num_param)
 {
   parse(param, num_param);
-  property_name = "compute_viscosity";
+  action_name = "compute_viscosity";
 }
 
 void Viscosity::parse(const char** param, int num_param)

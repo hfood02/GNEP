@@ -82,7 +82,7 @@ void __global__ gpu_sum_dpdt(const int N, const float* g_dpdt_per_atom, float* g
 
 }
 
-void Compute_dpdt::preprocess(
+void Compute_dpdt::pre_run(
   const int number_of_steps,
   const double time_step,
   Integrate& integrate,
@@ -92,6 +92,17 @@ void Compute_dpdt::preprocess(
   Force& force)
 {
   fid = fopen("dpdt.out", "a");
+  fprintf(fid, "# compute_dpdt %d\n", sample_interval);
+  fprintf(fid, "# format_version 1\n");
+  fprintf(fid, "# num_atoms %d\n", atom.number_of_atoms);
+  fprintf(
+    fid,
+    "# cell %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e\n",
+    box.cpu_h[0], box.cpu_h[3], box.cpu_h[6],
+    box.cpu_h[1], box.cpu_h[4], box.cpu_h[7],
+    box.cpu_h[2], box.cpu_h[5], box.cpu_h[8]);
+  fprintf(fid, "# dt_output %.10e fs\n", time_step * sample_interval * TIME_UNIT_CONVERSION);
+  fprintf(fid, "# columns time_fs dpdt_x dpdt_y dpdt_z P_x P_y P_z\n");
   gpu_dpdt_per_atom.resize(3 * atom.number_of_atoms);
   gpu_dpdt_total.resize(3);
   cpu_dpdt_total.resize(3);
@@ -102,7 +113,7 @@ void Compute_dpdt::preprocess(
   p_integral_dt = time_step * sample_interval;
 }
 
-void Compute_dpdt::process(
+void Compute_dpdt::end_of_step(
   const int number_of_steps,
   int step,
   const int fixed_group,
@@ -152,7 +163,7 @@ void Compute_dpdt::process(
   fflush(fid);
 }
 
-void Compute_dpdt::postprocess(
+void Compute_dpdt::post_run(
   Atom& atom,
   Box& box,
   Integrate& integrate,
@@ -187,5 +198,5 @@ void Compute_dpdt::parse(const char** param, int num_param)
 Compute_dpdt::Compute_dpdt(const char** param, int num_param)
 {
   parse(param, num_param);
-  property_name = "compute_dpdt";
+  action_name = "compute_dpdt";
 }

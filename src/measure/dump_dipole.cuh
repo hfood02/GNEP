@@ -14,12 +14,13 @@
 */
 
 #pragma once
-#include "property.cuh"
-#include "force/force.cuh"
+#include "action.cuh"
 #include "integrate/integrate.cuh"
 #include "model/atom.cuh"
 #include "model/group.cuh"
+#include "nep_response.cuh"
 #include "utilities/gpu_vector.cuh"
+#include <memory>
 #include <string>
 #include <vector>
 class Box;
@@ -27,12 +28,12 @@ class Atom;
 class Force;
 class Integrate;
 
-class Dump_Dipole : public Property
+class Dump_Dipole : public Action
 {
 public:
   Dump_Dipole(const char** param, int num_param);
   void parse(const char** param, int num_param);
-  virtual void preprocess(
+  virtual void pre_run(
     const int number_of_steps,
     const double time_step,
     Integrate& integrate,
@@ -41,7 +42,7 @@ public:
     Box& box,
     Force& force);
 
-  virtual void process(
+  virtual void end_of_step(
       const int number_of_steps,
       int step,
       const int fixed_group,
@@ -55,7 +56,7 @@ public:
       Atom& atom,
       Force& force);
 
-  virtual void postprocess(
+  virtual void post_run(
     Atom& atom,
     Box& box,
     Integrate& integrate,
@@ -66,9 +67,10 @@ public:
 private:
   bool dump_ = false;
   int dump_interval_ = 1;
+  std::string file_potential_;
   FILE* file_;
   GPU_Vector<double> gpu_dipole_;
   std::vector<double> cpu_dipole_;
   void write_dipole(const int step);
-  Atom atom_copy;
+  std::unique_ptr<NEP_Response> nep_response_;
 };

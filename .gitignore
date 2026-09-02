@@ -1,5 +1,6 @@
 \.cproject
 \.project
+\.idea
 core
 
 src/.vscode/*
@@ -19,10 +20,13 @@ public.*
 \#*
 
 /nep
+/*build*/
 /gpumd*
 /gnep
 
 __pycache__/
 */__pycache__/
+.pytest_cache/
+.hypothesis/
 README.gnep.md
 push-to-both.sh

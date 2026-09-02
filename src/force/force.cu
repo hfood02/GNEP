@@ -15,7 +15,7 @@
 The driver class calculating force and related quantities.
 ------------------------------------------------------------------------------*/
 
-#ifdef USE_TENSORFLOW
+#ifdef USE_DEEPMD
 #include "dp.cuh"
 #endif
 #ifdef USE_NNAP
@@ -125,15 +125,7 @@ void Force::parse_potential(
     is_nep = true;
     check_types(param[1]);
   } else if (
-    strcmp(potential_name, "nep5") == 0 || strcmp(potential_name, "nep5_zbl") == 0 ||
-    strcmp(potential_name, "nep3") == 0 || strcmp(potential_name, "nep3_zbl") == 0 ||
     strcmp(potential_name, "nep4") == 0 || strcmp(potential_name, "nep4_zbl") == 0 ||
-    strcmp(potential_name, "nep3_dipole") == 0 ||
-    strcmp(potential_name, "nep3_polarizability") == 0 ||
-    strcmp(potential_name, "nep4_dipole") == 0 ||
-    strcmp(potential_name, "nep4_polarizability") == 0 ||
-    strcmp(potential_name, "nep3_temperature") == 0 ||
-    strcmp(potential_name, "nep3_zbl_temperature") == 0 ||
     strcmp(potential_name, "nep4_temperature") == 0 ||
     strcmp(potential_name, "nep4_zbl_temperature") == 0) {
     int num_gpus;
@@ -161,23 +153,21 @@ void Force::parse_potential(
     is_nep = true;
     // Check if the types for this potential are compatible with the possibly other potentials
     check_types(param[1]);
-#ifdef USE_TENSORFLOW
+#ifdef USE_DEEPMD
   } else if (strcmp(potential_name, "dp") == 0) {
     if (num_param != 3) {
       PRINT_INPUT_ERROR(
-        "The potential command should contain two parameters, the setting file and the DP "
-        "potential file name.\n");
+        "The potential command should contain two parameters, the setting file and the DP potential file.\n");
     }
     potential.reset(new DP(param[2], number_of_atoms));
 #endif
 #ifdef USE_NNAP
-  } else if (strcmp(potential_name, "nnap") == 0) {
+  } else if (strcmp(potential_name, "nnap") == 0 || strcmp(potential_name, "nnap_zbl") == 0) {
     if (num_param != 3) {
       PRINT_INPUT_ERROR(
-        "The potential command should contain two parameters, "
-        "the setting file and the NNAP driver file name.\n");
+        "The potential command should contain two parameters, the setting file and the NNAP potential file.\n");
     }
-    potential.reset(new NNAP(param[2], number_of_atoms));
+    potential.reset(new NNAP(param[1], param[2], number_of_atoms));
 #endif
   } else if (strcmp(potential_name, "lj") == 0) {
     potential.reset(new LJ(fid_potential, num_types, number_of_atoms));
@@ -423,7 +413,8 @@ void Force::set_hnemdec_parameters(
   hnemd_fe_[2] = hnemd_fe_z;
 }
 
-static __global__ void gpu_apply_pbc(int N, Box box, double* g_x, double* g_y, double* g_z)
+static __global__ void gpu_apply_pbc(
+  int N, Box box, double* g_x, double* g_y, double* g_z, int* g_position_image)
 {
   int n = blockIdx.x * blockDim.x + threadIdx.x;
   if (n < N) {
@@ -436,22 +427,34 @@ static __global__ void gpu_apply_pbc(int N, Box box, double* g_x, double* g_y, d
     if (box.pbc_x == 1) {
       if (sx < 0.0) {
         sx += 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n]--;
       } else if (sx > 1.0) {
         sx -= 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n]++;
       }
     }
     if (box.pbc_y == 1) {
       if (sy < 0.0) {
         sy += 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n + N]--;
       } else if (sy > 1.0) {
         sy -= 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n + N]++;
       }
     }
     if (box.pbc_z == 1) {
       if (sz < 0.0) {
         sz += 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n + N * 2]--;
       } else if (sz > 1.0) {
         sz -= 1.0;
+        if (g_position_image != nullptr)
+          g_position_image[n + N * 2]++;
       }
     }
     g_x[n] = box.cpu_h[0] * sx + box.cpu_h[1] * sy + box.cpu_h[2] * sz;
@@ -501,7 +504,8 @@ void Force::compute(
       box,
       position_per_atom.data(),
       position_per_atom.data() + number_of_atoms,
-      position_per_atom.data() + number_of_atoms * 2);
+      position_per_atom.data() + number_of_atoms * 2,
+      nullptr);
   }
 
   initialize_properties<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
@@ -779,7 +783,8 @@ void Force::compute(
   GPU_Vector<double>& force_per_atom,
   GPU_Vector<double>& virial_per_atom,
   GPU_Vector<double>& velocity_per_atom,
-  GPU_Vector<double>& mass_per_atom)
+  GPU_Vector<double>& mass_per_atom,
+  int* position_image)
 {
   box.set_is_orthogonal();
 
@@ -790,7 +795,8 @@ void Force::compute(
       box,
       position_per_atom.data(),
       position_per_atom.data() + number_of_atoms,
-      position_per_atom.data() + number_of_atoms * 2);
+      position_per_atom.data() + number_of_atoms * 2,
+      position_image);
   }
 
   initialize_properties<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
@@ -802,7 +808,6 @@ void Force::compute(
     virial_per_atom.data());
   GPU_CHECK_KERNEL
 
-  temperature += delta_T;
   if (multiple_potentials_mode_.compare("observe") == 0) {
     // If observing, calculate using main potential only
     if (3 == potentials[0]->nep_model_type) {

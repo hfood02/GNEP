@@ -30,7 +30,7 @@ Dump thermo data to a file at a given interval.
 Dump_Thermo::Dump_Thermo(const char** param, int num_param) 
 {
   parse(param, num_param);
-  property_name = "dump_thermo";
+  action_name = "dump_thermo";
 }
 
 void Dump_Thermo::parse(const char** param, int num_param)
@@ -47,7 +47,7 @@ void Dump_Thermo::parse(const char** param, int num_param)
   printf("Dump thermo every %d steps.\n", dump_interval_);
 }
 
-void Dump_Thermo::preprocess(
+void Dump_Thermo::pre_run(
   const int number_of_steps,
   const double time_step,
   Integrate& integrate,
@@ -57,9 +57,20 @@ void Dump_Thermo::preprocess(
   Force& force)
 {
   fid_ = my_fopen("thermo.out", "a");
+  fprintf(fid_, "# dump_thermo %d\n", dump_interval_);
+  fprintf(fid_, "# format_version 1\n");
+  fprintf(fid_, "# num_atoms %d\n", atom.number_of_atoms);
+  fprintf(fid_, "# dt_output %.10e fs\n", time_step * dump_interval_ * TIME_UNIT_CONVERSION);
+  if (integrate.type >= 31) {
+    fprintf(
+      fid_,
+      "# columns T_target KE_quantum PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz\n");
+  } else {
+    fprintf(fid_, "# columns T KE PE sxx syy szz syz sxz sxy ax ay az bx by bz cx cy cz\n");
+  }
 }
 
-void Dump_Thermo::process(
+void Dump_Thermo::end_of_step(
   const int number_of_steps,
   int step,
   const int fixed_group,
@@ -120,7 +131,7 @@ void Dump_Thermo::process(
   fflush(fid_);
 }
 
-void Dump_Thermo::postprocess(
+void Dump_Thermo::post_run(
   Atom& atom,
   Box& box,
   Integrate& integrate,

@@ -24,6 +24,7 @@ heat transport, Phys. Rev. B. 104, 104309 (2021).
 #include "utilities/common.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
+#include "utilities/nep_parameters.cuh"
 #include "utilities/nep_utilities.cuh"
 #include <fstream>
 #include <iostream>
@@ -48,23 +49,15 @@ void NEP_Energy::initialize(const char* file_potential)
     exit(1);
   }
 
-  // nep3 1 C
+  // nep4 1 C
   std::vector<std::string> tokens = get_tokens(input);
   if (tokens.size() < 3) {
     std::cout << "The first line of nep.txt should have at least 3 items." << std::endl;
     exit(1);
   }
   if (tokens[0] == "nep4") {
-    paramb.version = 4;
     zbl.enabled = false;
   } else if (tokens[0] == "nep4_zbl") {
-    paramb.version = 4;
-    zbl.enabled = true;
-  } else if (tokens[0] == "nep5") {
-    paramb.version = 5;
-    zbl.enabled = false;
-  } else if (tokens[0] == "nep5_zbl") {
-    paramb.version = 5;
     zbl.enabled = true;
   } else {
     std::cout << tokens[0]
@@ -80,9 +73,9 @@ void NEP_Energy::initialize(const char* file_potential)
   }
 
   if (paramb.num_types == 1) {
-    printf("    Use the NEP%d potential with %d atom type.\n", paramb.version, paramb.num_types);
+    printf("    Use the NEP4 potential with %d atom type.\n", paramb.num_types);
   } else {
-    printf("    Use the NEP%d potential with %d atom types.\n", paramb.version, paramb.num_types);
+    printf("    Use the NEP4 potential with %d atom types.\n", paramb.num_types);
   }
 
   for (int n = 0; n < paramb.num_types; ++n) {
@@ -258,11 +251,8 @@ void NEP_Energy::initialize(const char* file_potential)
   // calculated parameters:
   paramb.num_types_sq = paramb.num_types * paramb.num_types;
 
-  if (paramb.version == 4) {
-    annmb.num_para = (annmb.dim + 2) * annmb.num_neurons1 * paramb.num_types + 1;
-  } else if (paramb.version == 5) {
-    annmb.num_para = ((annmb.dim + 2) * annmb.num_neurons1 + 1) * paramb.num_types + 1;
-  }
+  annmb.num_para = (annmb.dim + 2) * annmb.num_neurons1 * paramb.num_types + 1;
+  const int num_para_ann = annmb.num_para;
 
   printf("        number of neural network parameters = %d.\n", annmb.num_para);
   int num_para_descriptor =
@@ -280,6 +270,17 @@ void NEP_Energy::initialize(const char* file_potential)
   for (int n = 0; n < annmb.num_para; ++n) {
     tokens = get_tokens(input);
     parameters[n] = get_double_from_token(tokens[0], __FILE__, __LINE__);
+  }
+  std::vector<float> descriptor_parameters = get_descriptor_parameters_type_pair(
+    parameters,
+    num_para_ann,
+    paramb.num_types,
+    paramb.n_max_radial,
+    paramb.n_max_angular,
+    paramb.basis_size_radial,
+    paramb.basis_size_angular);
+  for (int n = 0; n < num_para_descriptor; ++n) {
+    parameters[num_para_ann + n] = descriptor_parameters[n];
   }
   nep_parameters.resize(annmb.num_para);
   nep_parameters.copy_from_host(parameters.data());
@@ -320,9 +321,6 @@ void NEP_Energy::update_potential(float* parameters, ANN& ann)
     pointer += ann.num_neurons1;
     ann.w1[t] = pointer;
     pointer += ann.num_neurons1;
-    if (paramb.version == 5) {
-      pointer += 1; // one extra bias for NEP5 stored in ann.w1[t]
-    }
   }
   ann.b1 = pointer;
   ann.c = ann.b1 + 1;
@@ -366,8 +364,8 @@ static __global__ void find_energy_nep(
       for (int n = 0; n <= paramb.n_max_radial; ++n) {
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_radial; ++k) {
-          int c_index = (n * (paramb.basis_size_radial + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2, n, k, paramb.n_max_radial, paramb.basis_size_radial);
           gn12 += fn12[k] * annmb.c[c_index];
         }
         q[n] += gn12;
@@ -391,8 +389,13 @@ static __global__ void find_energy_nep(
         find_fn(paramb.basis_size_angular, rcinv, d12, fc12, fn12);
         float gn12 = 0.0f;
         for (int k = 0; k <= paramb.basis_size_angular; ++k) {
-          int c_index = (n * (paramb.basis_size_angular + 1) + k) * paramb.num_types_sq;
-          c_index += t1 * paramb.num_types + t2 + paramb.num_c_radial;
+          int c_index = get_c_index(
+            t1 * paramb.num_types + t2,
+            n,
+            k,
+            paramb.n_max_angular,
+            paramb.basis_size_angular,
+            paramb.num_c_radial);
           gn12 += fn12[k] * annmb.c[c_index];
         }
         accumulate_s(paramb.L_max, d12, r12[0], r12[1], r12[2], gn12, s);
@@ -408,13 +411,8 @@ static __global__ void find_energy_nep(
 
     // get energy and energy gradient
     float F = 0.0f, Fp[MAX_DIM] = {0.0f};
-    if (paramb.version == 5) {
-      apply_ann_one_layer_nep5(
-        annmb.dim, annmb.num_neurons1, annmb.w0[t1], annmb.b0[t1], annmb.w1[t1], annmb.b1, q, F, Fp);
-    } else {
-      apply_ann_one_layer(
-        annmb.dim, annmb.num_neurons1, annmb.w0[t1], annmb.b0[t1], annmb.w1[t1], annmb.b1, q, F, Fp);
-    }
+    apply_ann_one_layer(
+      annmb.dim, annmb.num_neurons1, annmb.w0[t1], annmb.b0[t1], annmb.w1[t1], annmb.b1, q, F, Fp);
     g_pe[n1] = F;
   }
 }

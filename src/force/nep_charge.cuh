@@ -28,6 +28,7 @@ struct NEP_Charge_Data {
   GPU_Vector<float> f12z; // 3-body or manybody partial forces
   GPU_Vector<float> Fp;
   GPU_Vector<float> sum_fxyz;
+  GPU_Vector<float> descriptor_parameters_type_pair;
   GPU_Vector<int> NN_radial;    // radial neighbor list
   GPU_Vector<int> NL_radial;    // radial neighbor list
   GPU_Vector<int> NN_angular;   // angular neighbor list
@@ -75,10 +76,10 @@ public:
     int has_q_233 = 0;
     int has_q_134 = 0;
     int num_L;
-    int basis_size_radial = 8;  // for nep3
-    int basis_size_angular = 8; // for nep3
-    int num_types_sq = 0;       // for nep3
-    int num_c_radial = 0;       // for nep3
+    int basis_size_radial = 8;
+    int basis_size_angular = 8;
+    int num_types_sq = 0;
+    int num_c_radial = 0;
     int num_types = 0;
   };
 
@@ -93,6 +94,7 @@ public:
     const float* sqrt_epsilon_inf; // sqrt(epsilon_inf) related to BEC
     const float* b1;               // bias for the output layer
     const float* c;
+    const float* c_type_pair;
     const float* q_scaler;
   };
 

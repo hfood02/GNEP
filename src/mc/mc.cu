@@ -22,9 +22,21 @@ The driver class for the various MC ensembles.
 #include "mc_ensemble_sgc.cuh"
 #include "model/atom.cuh"
 #include "utilities/common.cuh"
+#include "utilities/compact_nep.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/read_file.cuh"
 #include <cstring>
+
+MC::MC(void)
+{
+  action_name = "mc";
+}
+
+MC::MC(const char** param, int num_param, std::vector<Group>& group, Atom& atom)
+{
+  action_name = "mc";
+  parse_mc(param, num_param, group, atom);
+}
 
 void MC::initialize(void)
 {
@@ -36,12 +48,36 @@ void MC::finalize(void) { do_mcmd = false; }
 void MC::compute(int step, int num_steps, Atom& atom, Box& box, std::vector<Group>& group)
 {
   if (do_mcmd) {
-    if ((step + 2) % num_steps_md == 0) {
+    if ((step + 1) % num_steps_md == 0) {
       double temperature =
         temperature_initial + step * (temperature_final - temperature_initial) / num_steps;
-      mc_ensemble->compute(step + 2, temperature, atom, box, group, grouping_method, group_id);
+      mc_ensemble->compute(step + 1, temperature, atom, box, group, grouping_method, group_id);
     }
   }
+}
+
+void MC::pre_run(
+  const int number_of_steps,
+  const double,
+  Integrate&,
+  std::vector<Group>&,
+  Atom&,
+  Box&,
+  Force&)
+{
+  number_of_steps_run = number_of_steps;
+}
+
+void MC::pre_force(
+  const int step,
+  const double,
+  Integrate&,
+  std::vector<Group>& group,
+  Atom& atom,
+  Box& box,
+  Force&)
+{
+  compute(step, number_of_steps_run, atom, box, group);
 }
 
 void MC::parse_group(
@@ -125,7 +161,7 @@ static std::string get_potential_file_name()
   }
 
   input_run.close();
-  return potential_file_name;
+  return get_compact_nep_filename(potential_file_name);
 }
 
 static std::vector<std::string> get_atom_symbols_in_nep()

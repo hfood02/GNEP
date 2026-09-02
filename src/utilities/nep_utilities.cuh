@@ -15,6 +15,18 @@
 
 #pragma once
 
+static __device__ __forceinline__ int get_c_index(
+  const int type_index,
+  const int n,
+  const int k,
+  const int n_max,
+  const int basis_size,
+  const int offset = 0)
+{
+  return offset + type_index * ((n_max + 1) * (basis_size + 1)) +
+         n * (basis_size + 1) + k;
+}
+
 const int NUM_OF_ABC = 80; // 3 + 5 + 7 + 9 + 11 + 13 + 15 + 17 for L_max = 8
 __constant__ float C3B[NUM_OF_ABC] = {
   0.238732414637843f, 0.119366207318922f, 0.119366207318922f, 0.099471839432435f,
@@ -244,71 +256,6 @@ static __device__ void apply_ann_two_layers(
   }
 }
 
-static __device__ void apply_ann_one_layer(
-  const int N_des,
-  const int N_neu,
-  const float* w0,
-  const float* b0,
-  const float* w1,
-  const float* b1,
-  float* q,
-  float& energy,
-  float* energy_derivative,
-  double* B_projection)
-{
-  for (int n = 0; n < N_neu; ++n) {
-    float w0_times_q = 0.0f;
-    for (int d = 0; d < N_des; ++d) {
-      w0_times_q += w0[n * N_des + d] * q[d];
-    }
-    float x1 = tanh(w0_times_q - b0[n]);
-    float tanh_der = 1.0f - x1 * x1;
-
-    // calculate B_projection:
-    // dE/dw0
-    for (int d = 0; d < N_des; ++d)
-      B_projection[n * (N_des + 2) + d] = tanh_der * q[d] * w1[n];
-    // dE/db0
-    B_projection[n * (N_des + 2) + N_des] = -tanh_der * w1[n];
-    // dE/dw1
-    B_projection[n * (N_des + 2) + N_des + 1] = x1;
-
-    energy += w1[n] * x1;
-    for (int d = 0; d < N_des; ++d) {
-      float y1 = tanh_der * w0[n * N_des + d];
-      energy_derivative[d] += w1[n] * y1;
-    }
-  }
-  energy -= b1[0];
-}
-
-static __device__ void apply_ann_one_layer_nep5(
-  const int N_des,
-  const int N_neu,
-  const float* w0,
-  const float* b0,
-  const float* w1,
-  const float* b1,
-  float* q,
-  float& energy,
-  float* energy_derivative)
-{
-  for (int n = 0; n < N_neu; ++n) {
-    float w0_times_q = 0.0f;
-    for (int d = 0; d < N_des; ++d) {
-      w0_times_q += w0[n * N_des + d] * q[d];
-    }
-    float x1 = tanh(w0_times_q - b0[n]);
-    float tanh_der = 1.0f - x1 * x1;
-    energy += w1[n] * x1;
-    for (int d = 0; d < N_des; ++d) {
-      float y1 = tanh_der * w0[n * N_des + d];
-      energy_derivative[d] += w1[n] * y1;
-    }
-  }
-  energy -= w1[N_neu] + b1[0]; // typewise bias + common bias
-}
-
 static __device__ void apply_ann_one_layer_charge(
   const int N_des,
   const int N_neu,
@@ -335,6 +282,37 @@ static __device__ void apply_ann_one_layer_charge(
       float y1 = tanh_der * w0[n * N_des + d];
       energy_derivative[d] += w1[n] * y1;
       charge_derivative[d] += w1[n + N_neu] * y1;
+    }
+  }
+  energy -= b1[0];
+}
+
+static __device__ void apply_ann_one_layer_vdw(
+  const int N_des,
+  const int N_neu,
+  const float* w0,
+  const float* b0,
+  const float* w1,
+  const float* b1,
+  float* q,
+  float& energy,
+  float* energy_derivative,
+  float& C6,
+  float* C6_derivative)
+{
+  for (int n = 0; n < N_neu; ++n) {
+    float w0_times_q = 0.0f;
+    for (int d = 0; d < N_des; ++d) {
+      w0_times_q += w0[n * N_des + d] * q[d];
+    }
+    float x1 = tanh(w0_times_q - b0[n]);
+    float tanh_der = 1.0f - x1 * x1;
+    energy += w1[n] * x1;
+    C6 += w1[n + N_neu] * x1;
+    for (int d = 0; d < N_des; ++d) {
+      float y1 = tanh_der * w0[n * N_des + d];
+      energy_derivative[d] += w1[n] * y1;
+      C6_derivative[d] += w1[n + N_neu] * y1;
     }
   }
   energy -= b1[0];

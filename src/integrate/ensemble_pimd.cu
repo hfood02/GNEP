@@ -23,14 +23,19 @@ References for implementation:
     Roman Korol et al., J. Chem Phys. 151, 124103 (2019).
 ------------------------------------------------------------------------------*/
 
+#include "eco_pimd.cuh"
 #include "ensemble_pimd.cuh"
 #include "langevin_utilities.cuh"
 #include "svr_utilities.cuh"
 #include "utilities/common.cuh"
 #include "utilities/gpu_macro.cuh"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 void Ensemble_PIMD::initialize_rng()
 {
@@ -56,7 +61,9 @@ Ensemble_PIMD::Ensemble_PIMD(
   int number_of_atoms_input,
   int number_of_beads_input,
   double temperature_coupling_input,
-  Atom& atom)
+  Atom& atom,
+  bool use_eco_pimd_input,
+  double eco_omega_max_cm1_input)
 {
   number_of_atoms = number_of_atoms_input;
   number_of_beads = number_of_beads_input;
@@ -64,6 +71,8 @@ Ensemble_PIMD::Ensemble_PIMD(
   temperature_coupling = temperature_coupling_input;
   thermostat_internal = true;
   thermostat_centroid = true;
+  use_eco_pimd = use_eco_pimd_input;
+  eco_omega_max_cm1 = eco_omega_max_cm1_input;
   initialize(atom);
 }
 
@@ -74,11 +83,17 @@ Ensemble_PIMD::Ensemble_PIMD(
   int num_target_pressure_components_input,
   double target_pressure_input[6],
   double pressure_coupling_input[6],
-  Atom& atom)
+  Atom& atom,
+  bool use_eco_pimd_input,
+  double eco_omega_max_cm1_input,
+  bool use_scr_barostat_input)
 {
   number_of_atoms = number_of_atoms_input;
   number_of_beads = number_of_beads_input;
   temperature_coupling = temperature_coupling_input;
+  use_eco_pimd = use_eco_pimd_input;
+  eco_omega_max_cm1 = eco_omega_max_cm1_input;
+  use_scr_barostat = use_scr_barostat_input;
   num_target_pressure_components = num_target_pressure_components_input;
   for (int i = 0; i < 6; i++) {
     target_pressure[i] = target_pressure_input[i];
@@ -172,10 +187,52 @@ void Ensemble_PIMD::initialize(Atom& atom)
   }
   transformation_matrix.copy_from_host(transformation_matrix_cpu.data());
 
+  if (use_eco_pimd) {
+    eco_mode_factors.resize(number_of_beads);
+  }
+
   curand_states.resize(number_of_atoms);
   int grid_size = (number_of_atoms - 1) / 128 + 1;
   initialize_curand_states<<<grid_size, 128>>>(curand_states.data(), number_of_atoms, rand());
   GPU_CHECK_KERNEL
+}
+
+void Ensemble_PIMD::update_eco_modes()
+{
+  if (!use_eco_pimd) {
+    return;
+  }
+  if (!(temperature > 0.0) || !std::isfinite(temperature)) {
+    PRINT_INPUT_ERROR("Eco-PIMD requires a positive finite temperature.");
+  }
+
+  const double temperature_tolerance =
+    1.0e-12 * std::max(1.0, std::fabs(temperature));
+  if (std::fabs(temperature - eco_last_temperature) <= temperature_tolerance) {
+    return;
+  }
+
+  // h*c/k_B in K cm; omega_max is supplied as a wavenumber in cm^-1.
+  const double cm_to_kelvin = 1.4387768775039338;
+  const double x_max = cm_to_kelvin * eco_omega_max_cm1 / temperature;
+  Eco_PIMD_Result result =
+    find_eco_pimd_frequencies(number_of_beads, x_max, eco_independent_frequencies);
+
+  eco_mode_factors.copy_from_host(result.mode_factors.data());
+  eco_independent_frequencies = std::move(result.independent_frequencies);
+  eco_last_temperature = temperature;
+
+  if (!eco_frequencies_reported) {
+    printf(
+      "    Eco-PIMD frequencies: T=%g K, x_max=%g, RMSE(Trotter)=%g, "
+      "RMSE(Eco)=%g, Newton iterations=%d.\n",
+      temperature,
+      x_max,
+      result.rmse_trotter,
+      result.rmse_eco,
+      result.number_of_iterations);
+    eco_frequencies_reported = true;
+  }
 }
 
 Ensemble_PIMD::~Ensemble_PIMD(void)
@@ -187,6 +244,8 @@ static __global__ void gpu_nve_1(
   const int number_of_atoms,
   const int number_of_beads,
   const double omega_n,
+  const bool use_eco_pimd,
+  const double* eco_mode_factors,
   const double time_step,
   const double* transformation_matrix,
   const double* g_mass,
@@ -228,7 +287,8 @@ static __global__ void gpu_nve_1(
     }
 
     for (int k = 1; k < number_of_beads; ++k) {
-      double omega_k = 2.0 * omega_n * sin(k * PI / number_of_beads);
+      double omega_k = use_eco_pimd ? omega_n * eco_mode_factors[k]
+                                     : 2.0 * omega_n * sin(k * PI / number_of_beads);
       // The exact solution is actaully not very stable:
       // double cos_factor = cos(omega_k * time_step);
       // double sin_factor = sin(omega_k * time_step);
@@ -294,6 +354,8 @@ static __global__ void gpu_langevin(
   const double temperature,
   const double temperature_coupling,
   const double omega_n,
+  const bool use_eco_pimd,
+  const double* eco_mode_factors,
   const double time_step,
   const double* transformation_matrix,
   const double* g_mass,
@@ -322,8 +384,14 @@ static __global__ void gpu_langevin(
       if (k == 0 && !thermostat_centroid) {
         continue;
       }
-      double c1 = (k == 0) ? exp(-0.5 / temperature_coupling)
-                           : exp(-time_step * omega_n * sin(k * PI / number_of_beads));
+      double c1;
+      if (k == 0) {
+        c1 = exp(-0.5 / temperature_coupling);
+      } else if (use_eco_pimd) {
+        c1 = exp(-0.5 * time_step * omega_n * eco_mode_factors[k]);
+      } else {
+        c1 = exp(-time_step * omega_n * sin(k * PI / number_of_beads));
+      }
       double c2 = sqrt((1 - c1 * c1) * K_B * temperature * number_of_beads / g_mass[n]);
       for (int d = 0; d < 3; ++d) {
         int index_kd = k * 3 + d;
@@ -585,7 +653,8 @@ gpu_find_thermo(const double volume, const double NkBT, const double* g_sum_1024
 }
 
 static void cpu_pressure_orthogonal(
-  std::mt19937 rng,
+  std::mt19937& rng,
+  bool use_scr_barostat,
   Box& box,
   double target_temperature,
   double* p0,
@@ -595,10 +664,16 @@ static void cpu_pressure_orthogonal(
 {
   double p[3];
   CHECK(gpuMemcpy(p, thermo + 2, sizeof(double) * 3, gpuMemcpyDeviceToHost));
+  const double volume = box.get_volume();
 
   if (box.pbc_x == 1) {
     const double scale_factor_Berendsen = 1.0 - p_coupling[0] * (p0[0] - p[0]);
     scale_factor[0] = scale_factor_Berendsen;
+    if (use_scr_barostat) {
+      const double scale_factor_stochastic =
+        sqrt(2.0 * p_coupling[0] * K_B * target_temperature / volume) * gasdev(rng);
+      scale_factor[0] += scale_factor_stochastic;
+    }
     box.cpu_h[0] *= scale_factor[0];
   } else {
     scale_factor[0] = 1.0;
@@ -607,6 +682,11 @@ static void cpu_pressure_orthogonal(
   if (box.pbc_y == 1) {
     const double scale_factor_Berendsen = 1.0 - p_coupling[1] * (p0[1] - p[1]);
     scale_factor[1] = scale_factor_Berendsen;
+    if (use_scr_barostat) {
+      const double scale_factor_stochastic =
+        sqrt(2.0 * p_coupling[1] * K_B * target_temperature / volume) * gasdev(rng);
+      scale_factor[1] += scale_factor_stochastic;
+    }
     box.cpu_h[4] *= scale_factor[1];
   } else {
     scale_factor[1] = 1.0;
@@ -615,6 +695,11 @@ static void cpu_pressure_orthogonal(
   if (box.pbc_z == 1) {
     const double scale_factor_Berendsen = 1.0 - p_coupling[2] * (p0[2] - p[2]);
     scale_factor[2] = scale_factor_Berendsen;
+    if (use_scr_barostat) {
+      const double scale_factor_stochastic =
+        sqrt(2.0 * p_coupling[2] * K_B * target_temperature / volume) * gasdev(rng);
+      scale_factor[2] += scale_factor_stochastic;
+    }
     box.cpu_h[8] *= scale_factor[2];
   } else {
     scale_factor[2] = 1.0;
@@ -623,7 +708,8 @@ static void cpu_pressure_orthogonal(
 }
 
 static void cpu_pressure_isotropic(
-  std::mt19937 rng,
+  std::mt19937& rng,
+  bool use_scr_barostat,
   Box& box,
   double target_temperature,
   double* target_pressure,
@@ -637,6 +723,12 @@ static void cpu_pressure_isotropic(
   const double scale_factor_Berendsen =
     1.0 - p_coupling[0] * (target_pressure[0] - pressure_instant);
   scale_factor = scale_factor_Berendsen;
+  if (use_scr_barostat) {
+    const double scale_factor_stochastic =
+      sqrt(0.666666666666667 * p_coupling[0] * K_B * target_temperature / box.get_volume()) *
+      gasdev(rng);
+    scale_factor += scale_factor_stochastic;
+  }
   box.cpu_h[0] *= scale_factor;
   box.cpu_h[4] *= scale_factor;
   box.cpu_h[8] *= scale_factor;
@@ -644,7 +736,8 @@ static void cpu_pressure_isotropic(
 }
 
 static void cpu_pressure_triclinic(
-  std::mt19937 rng,
+  std::mt19937& rng,
+  bool use_scr_barostat,
   Box& box,
   double target_temperature,
   double* p0,
@@ -661,19 +754,24 @@ static void cpu_pressure_triclinic(
   mu[3] = mu[1] = -p_coupling[5] * (p0[5] - p[3]); // xy
   mu[6] = mu[2] = -p_coupling[4] * (p0[4] - p[4]); // xz
   mu[7] = mu[5] = -p_coupling[3] * (p0[3] - p[5]); // yz
-  /*
-  double p_coupling_3by3[3][3] = {
-    {p_coupling[0], p_coupling[3], p_coupling[4]},
-    {p_coupling[3], p_coupling[1], p_coupling[5]},
-    {p_coupling[4], p_coupling[5], p_coupling[2]}};
-  const double volume = box.get_volume();
-  for (int r = 0; r < 3; ++r) {
-    for (int c = 0; c < 3; ++c) {
-      mu[r * 3 + c] +=
-        sqrt(2.0 * p_coupling_3by3[r][c] * K_B * target_temperature / volume) * gasdev(rng);
-    }
+  if (use_scr_barostat) {
+    const double volume = box.get_volume();
+    mu[0] += sqrt(2.0 * p_coupling[0] * K_B * target_temperature / volume) * gasdev(rng);
+    mu[4] += sqrt(2.0 * p_coupling[1] * K_B * target_temperature / volume) * gasdev(rng);
+    mu[8] += sqrt(2.0 * p_coupling[2] * K_B * target_temperature / volume) * gasdev(rng);
+    const double noise_yz =
+      sqrt(p_coupling[3] * K_B * target_temperature / volume) * gasdev(rng);
+    const double noise_xz =
+      sqrt(p_coupling[4] * K_B * target_temperature / volume) * gasdev(rng);
+    const double noise_xy =
+      sqrt(p_coupling[5] * K_B * target_temperature / volume) * gasdev(rng);
+    mu[5] += noise_yz;
+    mu[7] += noise_yz;
+    mu[2] += noise_xz;
+    mu[6] += noise_xz;
+    mu[1] += noise_xy;
+    mu[3] += noise_xy;
   }
-  */
   double h_old[9];
   for (int i = 0; i < 9; ++i) {
     h_old[i] = box.cpu_h[i];
@@ -704,10 +802,11 @@ static __global__ void gpu_pressure_orthogonal(
     double scale_factor[3] = {scale_factor_x, scale_factor_y, scale_factor_z};
     for (int d = 0; d < 3; ++d) {
       const int index = i + d * number_of_particles;
-      g_average_position[index] *= scale_factor[d];
+      const double displacement = (scale_factor[d] - 1.0) * g_average_position[index];
       for (int k = 0; k < number_of_beads; ++k) {
-        g_beads_position[k][index] *= scale_factor[d];
+        g_beads_position[k][index] += displacement;
       }
+      g_average_position[index] *= scale_factor[d];
     }
   }
 }
@@ -723,10 +822,11 @@ static __global__ void gpu_pressure_isotropic(
   if (i < number_of_particles) {
     for (int d = 0; d < 3; ++d) {
       const int index = i + d * number_of_particles;
-      g_average_position[index] *= scale_factor;
+      const double displacement = (scale_factor - 1.0) * g_average_position[index];
       for (int k = 0; k < number_of_beads; ++k) {
-        g_beads_position[k][index] *= scale_factor;
+        g_beads_position[k][index] += displacement;
       }
+      g_average_position[index] *= scale_factor;
     }
   }
 }
@@ -748,20 +848,23 @@ static __global__ void gpu_pressure_triclinic(
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < number_of_particles) {
-    double x_old = g_average_position[i];
-    double y_old = g_average_position[i + number_of_particles];
-    double z_old = g_average_position[i + number_of_particles * 2];
-    g_average_position[i] = mu0 * x_old + mu1 * y_old + mu2 * z_old;
-    g_average_position[i + number_of_particles] = mu3 * x_old + mu4 * y_old + mu5 * z_old;
-    g_average_position[i + number_of_particles * 2] = mu6 * x_old + mu7 * y_old + mu8 * z_old;
+    const double x_old = g_average_position[i];
+    const double y_old = g_average_position[i + number_of_particles];
+    const double z_old = g_average_position[i + number_of_particles * 2];
+    const double x_new = mu0 * x_old + mu1 * y_old + mu2 * z_old;
+    const double y_new = mu3 * x_old + mu4 * y_old + mu5 * z_old;
+    const double z_new = mu6 * x_old + mu7 * y_old + mu8 * z_old;
+    const double displacement_x = x_new - x_old;
+    const double displacement_y = y_new - y_old;
+    const double displacement_z = z_new - z_old;
     for (int k = 0; k < number_of_beads; ++k) {
-      double x_old = g_beads_position[k][i];
-      double y_old = g_beads_position[k][i + number_of_particles];
-      double z_old = g_beads_position[k][i + number_of_particles * 2];
-      g_beads_position[k][i] = mu0 * x_old + mu1 * y_old + mu2 * z_old;
-      g_beads_position[k][i + number_of_particles] = mu3 * x_old + mu4 * y_old + mu5 * z_old;
-      g_beads_position[k][i + number_of_particles * 2] = mu6 * x_old + mu7 * y_old + mu8 * z_old;
+      g_beads_position[k][i] += displacement_x;
+      g_beads_position[k][i + number_of_particles] += displacement_y;
+      g_beads_position[k][i + number_of_particles * 2] += displacement_z;
     }
+    g_average_position[i] = x_new;
+    g_average_position[i + number_of_particles] = y_new;
+    g_average_position[i + number_of_particles * 2] = z_new;
   }
 }
 
@@ -776,6 +879,8 @@ void Ensemble_PIMD::langevin(const double time_step, Atom& atom)
       temperature,
       temperature_coupling,
       omega_n,
+      use_eco_pimd,
+      use_eco_pimd ? eco_mode_factors.data() : nullptr,
       time_step,
       transformation_matrix.data(),
       atom.mass.data(),
@@ -800,6 +905,7 @@ void Ensemble_PIMD::compute1(
   GPU_Vector<double>& thermo)
 {
   omega_n = number_of_beads * K_B * temperature / HBAR;
+  update_eco_modes();
 
   langevin(time_step, atom);
 
@@ -811,6 +917,8 @@ void Ensemble_PIMD::compute1(
     number_of_atoms,
     number_of_beads,
     omega_n,
+    use_eco_pimd,
+    use_eco_pimd ? eco_mode_factors.data() : nullptr,
     time_step,
     transformation_matrix.data(),
     atom.mass.data(),
@@ -885,7 +993,14 @@ void Ensemble_PIMD::compute2(
   if (num_target_pressure_components == 1) {
     double scale_factor;
     cpu_pressure_isotropic(
-      rng, box, temperature, target_pressure, pressure_coupling, thermo.data(), scale_factor);
+      rng,
+      use_scr_barostat,
+      box,
+      temperature,
+      target_pressure,
+      pressure_coupling,
+      thermo.data(),
+      scale_factor);
     gpu_pressure_isotropic<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
       number_of_atoms,
       number_of_beads,
@@ -895,7 +1010,14 @@ void Ensemble_PIMD::compute2(
   } else if (num_target_pressure_components == 3) {
     double scale_factor[3];
     cpu_pressure_orthogonal(
-      rng, box, temperature, target_pressure, pressure_coupling, thermo.data(), scale_factor);
+      rng,
+      use_scr_barostat,
+      box,
+      temperature,
+      target_pressure,
+      pressure_coupling,
+      thermo.data(),
+      scale_factor);
     gpu_pressure_orthogonal<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
       number_of_atoms,
       number_of_beads,
@@ -908,7 +1030,14 @@ void Ensemble_PIMD::compute2(
   } else if (num_target_pressure_components == 6) {
     double mu[9];
     cpu_pressure_triclinic(
-      rng, box, temperature, target_pressure, pressure_coupling, thermo.data(), mu);
+      rng,
+      use_scr_barostat,
+      box,
+      temperature,
+      target_pressure,
+      pressure_coupling,
+      thermo.data(),
+      mu);
     gpu_pressure_triclinic<<<(number_of_atoms - 1) / 128 + 1, 128>>>(
       number_of_atoms,
       number_of_beads,

@@ -19,13 +19,16 @@ Get the fitness
 
 #include "fitness.cuh"
 #include "nep.cuh"
+#include "nep_vdw.cuh"
 #include "nep_charge.cuh"
+#include "nep_charge_vdw.cuh"
 #include "tnep.cuh"
 #include "parameters.cuh"
 #include "structure.cuh"
 #include "utilities/error.cuh"
 #include "utilities/gpu_macro.cuh"
 #include "utilities/gpu_vector.cuh"
+#include "utilities/nep_parameters.cuh"
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -124,15 +127,16 @@ Fitness::Fitness(Parameters& para)
   }
 
   if (para.train_mode == 1 || para.train_mode == 2) {
-    potential.reset(
-      new TNEP(para, N, N_times_max_NN_radial, N_times_max_NN_angular, para.version, deviceCount));
+    potential.reset(new TNEP(para, N, para.version, deviceCount));
   } else {
-    if (para.charge_mode) {
-      potential.reset(
-        new NEP_Charge(para, N, Nc, N_times_max_NN_radial, N_times_max_NN_angular, para.version, deviceCount));
+    if (para.charge_vdw) {
+      potential.reset(new NEP_Charge_VDW(para, N, Nc, para.version, deviceCount));
+    } else if (para.charge_mode) {
+      potential.reset(new NEP_Charge(para, N, Nc, para.version, deviceCount));
+    } else if (para.vdw) {
+      potential.reset(new NEP_VDW(para, N, Nc, para.version, deviceCount));
     } else {
-      potential.reset(
-        new NEP(para, N, N_times_max_NN_radial, N_times_max_NN_angular, para.version, deviceCount));
+      potential.reset(new NEP(para, N, para.version, deviceCount));
     }
   }
 
@@ -169,7 +173,7 @@ void Fitness::compute(
         para,
         dummy_solution.data(),
         train_set[n],
-        (para.fine_tune ? false : true),
+        (para.fine_tune || para.import_q_scaler) ? false : true,
         deviceCount);
     }
   } else {
@@ -197,61 +201,6 @@ void Fitness::compute(
             para.lambda_q * rmse_charge_array[t];
           fitness_bec[deviceCount * n + m + t * para.population_size] =
             para.lambda_z * rmse_bec_array[t];
-        }
-      }
-    }
-
-    if (para.use_full_batch) {
-      int count_batch = 0;
-      for (int batch_id = 0; batch_id < num_batches; ++batch_id) {
-        if (batch_id == generation % num_batches) {
-          continue; // skip the batch that has already been calculated
-        }
-        ++count_batch;
-        for (int n = 0; n < population_iter; ++n) {
-          const float* individual = population + deviceCount * n * para.number_of_variables;
-          potential->find_force(para, individual, train_set[batch_id], false, deviceCount);
-          for (int m = 0; m < deviceCount; ++m) {
-            float energy_shift_per_structure_not_used;
-            auto rmse_energy_array = train_set[batch_id][m].get_rmse_energy(
-              para, energy_shift_per_structure_not_used, true, true, m);
-            auto rmse_force_array = train_set[batch_id][m].get_rmse_force(para, true, m);
-            auto rmse_virial_array = train_set[batch_id][m].get_rmse_virial(para, true, m);
-            auto rmse_charge_array = train_set[batch_id][m].get_rmse_charge(para, m);
-            auto rmse_bec_array = train_set[batch_id][m].get_rmse_bec(para, m);
-            for (int t = 0; t <= para.num_types; ++t) {
-              // energy
-              float old_value = fitness_energy[deviceCount * n + m + t * para.population_size];
-              float new_value = para.lambda_e * rmse_energy_array[t];
-              new_value = old_value * old_value * count_batch + new_value * new_value;
-              new_value = sqrt(new_value / (count_batch + 1));
-              fitness_energy[deviceCount * n + m + t * para.population_size] = new_value;
-              // force
-              old_value = fitness_force[deviceCount * n + m + t * para.population_size];
-              new_value = para.lambda_f * rmse_force_array[t];
-              new_value = old_value * old_value * count_batch + new_value * new_value;
-              new_value = sqrt(new_value / (count_batch + 1));
-              fitness_force[deviceCount * n + m + t * para.population_size] = new_value;
-              // virial
-              old_value = fitness_virial[deviceCount * n + m + t * para.population_size];
-              new_value = para.lambda_v * rmse_virial_array[t];
-              new_value = old_value * old_value * count_batch + new_value * new_value;
-              new_value = sqrt(new_value / (count_batch + 1));
-              fitness_virial[deviceCount * n + m + t * para.population_size] = new_value;
-              // charge
-              old_value = fitness_charge[deviceCount * n + m + t * para.population_size];
-              new_value = para.lambda_q * rmse_charge_array[t];
-              new_value = old_value * old_value * count_batch + new_value * new_value;
-              new_value = sqrt(new_value / (count_batch + 1));
-              fitness_charge[deviceCount * n + m + t * para.population_size] = new_value;
-              // BEC
-              old_value = fitness_bec[deviceCount * n + m + t * para.population_size];
-              new_value = para.lambda_z * rmse_bec_array[t];
-              new_value = old_value * old_value * count_batch + new_value * new_value;
-              new_value = sqrt(new_value / (count_batch + 1));
-              fitness_bec[deviceCount * n + m + t * para.population_size] = new_value;
-            }
-          }
         }
       }
     }
@@ -324,19 +273,35 @@ for (int nc = 0; nc < dataset.Nc; ++nc) {
 void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
 {
   if (para.train_mode == 0) { // potential model
-    if (!para.charge_mode) {
+    if (!(para.charge_mode || para.charge_vdw)) {
       if (para.version == 4) {
         if (para.enable_zbl) {
-          fprintf(fid_nep, "nep4_zbl %d ", para.num_types);
+          if (para.vdw) {
+            fprintf(fid_nep, "nep4_zbl_vdw %d ", para.num_types);
+          } else {
+            fprintf(fid_nep, "nep4_zbl %d ", para.num_types);
+          }
         } else {
-          fprintf(fid_nep, "nep4 %d ", para.num_types);
+          if (para.vdw) {
+            fprintf(fid_nep, "nep4_vdw %d ", para.num_types);
+          } else {
+            fprintf(fid_nep, "nep4 %d ", para.num_types);
+          }
         }
       } 
     } else {
-      if (para.enable_zbl) {
-        fprintf(fid_nep, "nep4_zbl_charge%d %d ", para.charge_mode, para.num_types);
+      if (para.charge_vdw) {
+        if (para.enable_zbl) {
+          fprintf(fid_nep, "nep4_zbl_charge_vdw %d ", para.num_types);
+        } else {
+          fprintf(fid_nep, "nep4_charge_vdw %d ", para.num_types);
+        }
       } else {
-        fprintf(fid_nep, "nep4_charge%d %d ", para.charge_mode, para.num_types);
+        if (para.enable_zbl) {
+          fprintf(fid_nep, "nep4_zbl_charge%d %d ", para.charge_mode, para.num_types);
+        } else {
+          fprintf(fid_nep, "nep4_charge%d %d ", para.charge_mode, para.num_types);
+        }
       }
     }
   } else if (para.train_mode == 1) { // dipole model
@@ -402,8 +367,23 @@ void Fitness::write_nep_txt(FILE* fid_nep, Parameters& para, float* elite)
     fprintf(fid_nep, "ANN %d %d\n", para.num_neurons1, 0);
   }
 
+  std::vector<float> parameters_file(elite, elite + para.number_of_variables);
+  const int descriptor_offset = para.number_of_variables_ann * (para.train_mode == 2 ? 2 : 1);
+#ifdef USE_CJ
+  const int num_channels = para.num_types;
+#else
+  const int num_channels = para.num_types * para.num_types;
+#endif
+  descriptor_parameters_to_basis_major(
+    parameters_file.data(),
+    descriptor_offset,
+    num_channels,
+    para.n_max_radial,
+    para.n_max_angular,
+    para.basis_size_radial,
+    para.basis_size_angular);
   for (int m = 0; m < para.number_of_variables; ++m) {
-    fprintf(fid_nep, "%15.7e\n", elite[m]);
+    fprintf(fid_nep, "%15.7e\n", parameters_file[m]);
   }
   CHECK(gpuSetDevice(0));
   para.q_scaler_gpu[0].copy_to_host(para.q_scaler_cpu.data());
@@ -438,7 +418,7 @@ void Fitness::report_error(
   const float loss_L2,
   float* elite)
 {
-  if (0 == (generation + 1) % 100) {
+  if (0 == (generation + 1) % para.output_interval) {
     int batch_id = generation % num_batches;
     potential->find_force(para, elite, train_set[batch_id], false, 1);
     float energy_shift_per_structure;
@@ -496,10 +476,10 @@ void Fitness::report_error(
     }
 
     if (para.train_mode == 0 || para.train_mode == 3) {
-      if (!para.charge_mode) {
+      if (!(para.charge_mode || para.charge_vdw)) {
         // NEP models
         printf(
-          "%-8d%-11.5f%-11.5f%-11.5f%-13.5f%-13.5f%-13.5f%-13.5f%-13.5f%-13.5f\n",
+          "%-8d %-11.5f %-11.5f %-11.5f %-13.5f %-13.5f %-13.5f %-13.5f %-13.5f %-13.5f\n",
           generation + 1,
           loss_total,
           loss_L1,
@@ -512,7 +492,7 @@ void Fitness::report_error(
           rmse_virial_test);
         fprintf(
           fid_loss_out,
-          "%-8d%-11.5f%-11.5f%-11.5f%-13.5f%-13.5f%-13.5f%-13.5f%-13.5f%-13.5f\n",
+          "%-8d %-11.5f %-11.5f %-11.5f %-13.5f %-13.5f %-13.5f %-13.5f %-13.5f %-13.5f\n",
           generation + 1,
           loss_total,
           loss_L1,
@@ -526,7 +506,7 @@ void Fitness::report_error(
       } else {
         // qNEP models:
         printf(
-          "%-8d%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f\n",
+          "%-8d %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f\n",
           generation + 1,
           loss_total,
           loss_L1,
@@ -543,7 +523,7 @@ void Fitness::report_error(
           rmse_bec_test);
         fprintf(
           fid_loss_out,
-          "%-8d%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f%-9.5f\n",
+          "%-8d %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f %-9.5f\n",
           generation + 1,
           loss_total,
           loss_L1,
@@ -562,7 +542,7 @@ void Fitness::report_error(
     } else {
       // TNEP models:
       printf(
-        "%-8d%-11.5f%-11.5f%-11.5f%-13.5f%-13.5f\n",
+        "%-8d %-11.5f %-11.5f %-11.5f %-13.5f %-13.5f\n",
         generation + 1,
         loss_total,
         loss_L1,
@@ -571,7 +551,7 @@ void Fitness::report_error(
         rmse_virial_test);
       fprintf(
         fid_loss_out,
-        "%-8d%-11.5f%-11.5f%-11.5f%-13.5f%-13.5f\n",
+        "%-8d %-11.5f %-11.5f %-11.5f %-13.5f %-13.5f\n",
         generation + 1,
         loss_total,
         loss_L1,
@@ -593,7 +573,7 @@ void Fitness::report_error(
         fclose(fid_force);
         fclose(fid_virial);
         fclose(fid_stress);
-        if (para.charge_mode) {
+        if ((para.charge_mode || para.charge_vdw)) {
           FILE* fid_charge = my_fopen("charge_test.out", "w");
           update_charge(fid_charge, test_set[0]);
           fclose(fid_charge);
@@ -613,10 +593,10 @@ void Fitness::report_error(
         fclose(fid_polarizability);
       }
     }
+  }
 
-    if (0 == (generation + 1) % 1000) {
-      predict(para, elite);
-    }
+  if (0 == (generation + 1) % 1000) {
+    predict(para, elite);
   }
 }
 
@@ -692,9 +672,9 @@ void Fitness::predict(Parameters& para, float* elite)
     FILE* fid_energy = my_fopen("energy_train.out", "w");
     FILE* fid_virial = my_fopen("virial_train.out", "w");
     FILE* fid_stress = my_fopen("stress_train.out", "w");
-    FILE* fid_charge;
-    FILE* fid_bec;
-    if (para.charge_mode) {
+    FILE* fid_charge = nullptr;
+    FILE* fid_bec = nullptr;
+    if ((para.charge_mode || para.charge_vdw)) {
       fid_charge = my_fopen("charge_train.out", "w");
       if (para.has_bec) {
         fid_bec = my_fopen("bec_train.out", "w");
@@ -704,7 +684,7 @@ void Fitness::predict(Parameters& para, float* elite)
       potential->find_force(para, elite, train_set[batch_id], false, 1);
       update_energy_force_virial(
         fid_energy, fid_force, fid_virial, fid_stress, train_set[batch_id][0]);
-      if (para.charge_mode) {
+      if ((para.charge_mode || para.charge_vdw)) {
         update_charge(fid_charge, train_set[batch_id][0]);
         if (para.has_bec) {
           update_bec(fid_bec, train_set[batch_id][0]);
@@ -715,7 +695,7 @@ void Fitness::predict(Parameters& para, float* elite)
     fclose(fid_force);
     fclose(fid_virial);
     fclose(fid_stress);
-    if (para.charge_mode) {
+    if ((para.charge_mode || para.charge_vdw)) {
       fclose(fid_charge);
       if (para.has_bec) {
         fclose(fid_bec);

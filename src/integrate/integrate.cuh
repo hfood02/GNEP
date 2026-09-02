@@ -65,7 +65,6 @@ public:
     Box& box,
     std::vector<Group>& group,
     GPU_Vector<double>& thermo);
-  void parse_deform(const char**, int);
   void parse_fix(const char**, int, std::vector<Group>& group);
   void parse_move(const char**, int, std::vector<Group>& group);
 
@@ -83,6 +82,9 @@ public:
   double temperature1; // target initial temperature for a run
   double temperature2; // target final temperature for a run
   double delta_temperature;
+  bool use_heat_lan_region = false;
+  double heat_source_region[6];
+  double heat_sink_region[6];
   double target_pressure[6];
   int num_target_pressure_components;
   double temperature_coupling;
@@ -94,10 +96,20 @@ public:
   int deform_x = 0;
   int deform_y = 0;
   int deform_z = 0;
-  double deform_rate[3];
+  int deform_xy = 0;
+  int deform_xz = 0;
+  int deform_yz = 0;
+
+  // Dynamic arrays for multiple thermostats
+  std::vector<int> heat_thermostat;  // Thermostat types (0=NHC, 1=Langevin)
+  std::vector<double> heat_coupling; // Coupling parameters for each thermostat
+  std::vector<int> heat_labels;      // Group labels for each thermostat
 
   // PIMD
   int number_of_beads;
+  bool use_eco_pimd = false;
+  bool use_scr_barostat = false;
+  double eco_omega_max_cm1 = 0.0;
 
   // TTM parameters
   TTM_Parameters ttm_parameters;

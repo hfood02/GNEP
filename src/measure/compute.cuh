@@ -14,12 +14,12 @@
 */
 
 #pragma once
-#include "property.cuh"
+#include "action.cuh"
 #include "model/group.cuh"
 #include "utilities/gpu_vector.cuh"
 #include <vector>
 
-class Compute : public Property
+class Compute : public Action
 {
 public:
   int compute_temperature = 0;
@@ -34,7 +34,7 @@ public:
   int output_interval = 1;
   int grouping_method = 0;
 
-  virtual void preprocess(
+  virtual void pre_run(
     const int number_of_steps,
     const double time_step,
     Integrate& integrate,
@@ -43,7 +43,7 @@ public:
     Box& box,
     Force& force);
 
-  virtual void process(
+  virtual void end_of_step(
       const int number_of_steps,
       int step,
       const int fixed_group,
@@ -57,7 +57,7 @@ public:
       Atom& atom,
       Force& force);
 
-  virtual void postprocess(
+  virtual void post_run(
     Atom& atom,
     Box& box,
     Integrate& integrate,
@@ -80,6 +80,11 @@ private:
   GPU_Vector<double> gpu_per_atom_z;
 
   int number_of_scalars = 0;
+  
+  void output_results(
+    const double energy_transferred[], const std::vector<Group>& group);
 
-  void output_results(const double energy_transferred[], const std::vector<Group>& group);
+  // Handle multiple thermal reservoirs
+  void output_results_n(
+    const double energy_transferred_n[], const std::vector<Group>& group, int num_thermostats);
 };

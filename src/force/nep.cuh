@@ -26,6 +26,7 @@ struct NEP_Data {
   GPU_Vector<float> f12z; // 3-body or manybody partial forces
   GPU_Vector<float> Fp;
   GPU_Vector<float> sum_fxyz;
+  GPU_Vector<float> descriptor_parameters_type_pair;
   GPU_Vector<int> NN_radial;    // radial neighbor list
   GPU_Vector<int> NL_radial;    // radial neighbor list
   GPU_Vector<int> NN_angular;   // angular neighbor list
@@ -42,9 +43,7 @@ public:
   struct ParaMB {
     bool use_typewise_cutoff_zbl = false;
     float typewise_cutoff_zbl_factor = 0.0f;
-    int version = 4; // NEP version, 3 for NEP3 and 4 for NEP4
-    int model_type =
-      0; // 0=potential, 1=dipole, 2=polarizability, 3=temperature-dependent free energy
+    int model_type = 0; // 0=potential, 3=temperature-dependent free energy
     float rc_radial_max = 0.0f;
     float rc_radial_max_inv = 0.0f; 
     float rc_radial[NUM_ELEMENTS];     // radial cutoff
@@ -62,10 +61,10 @@ public:
     int has_q_233 = 0;
     int has_q_134 = 0;
     int num_L;
-    int basis_size_radial = 8;  // for nep3
-    int basis_size_angular = 8; // for nep3
-    int num_types_sq = 0;       // for nep3
-    int num_c_radial = 0;       // for nep3
+    int basis_size_radial = 8;
+    int basis_size_angular = 8;
+    int num_types_sq = 0;
+    int num_c_radial = 0;
     int num_types = 0;
   };
 
@@ -79,11 +78,7 @@ public:
     const float* w1[NUM_ELEMENTS]; // weight from the hidden layer to the output layer
     const float* b1;               // bias for the output layer
     const float* c;
-    // for the scalar part of polarizability
-    const float* w0_pol[10];
-    const float* b0_pol[10];
-    const float* w1_pol[10];
-    const float* b1_pol;
+    const float* c_type_pair;
     const float* q_scaler;
   };
 
